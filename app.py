@@ -140,28 +140,103 @@ def apply_network_theme(network: str) -> None:
                 --chain-gradient: {theme["gradient"]};
             }}
 
-            /* Identité réseau : visible, mais limitée aux accents UI. */
-            .network-badge {{
-                display: inline-flex;
-                align-items: center;
-                gap: 0.48rem;
-                margin-top: 0.2rem;
-                padding: 0.3rem 0.68rem;
-                border: 1px solid var(--chain-ring);
-                border-radius: 999px;
-                background: var(--chain-soft);
-                color: var(--chain-accent);
-                font-size: 0.82rem;
-                font-weight: 650;
-                line-height: 1.2rem;
+            /* Sidebar réseau compacte. */
+            .sidebar-network-title {{
+                margin: 0 0 0.15rem 0;
+                font-size: 1.16rem;
+                line-height: 1.35;
+                font-weight: 700;
+                letter-spacing: -0.01em;
             }}
-            .network-badge-dot {{
-                width: 0.48rem;
-                height: 0.48rem;
+            .sidebar-network-status {{
+                display: flex;
+                align-items: center;
+                gap: 0.42rem;
+                margin-top: 0.12rem;
+                color: #8a8f98;
+                font-size: 0.78rem;
+                line-height: 1.25rem;
+            }}
+            .sidebar-network-status strong {{
+                color: var(--chain-accent);
+                font-weight: 700;
+            }}
+            .sidebar-network-status-dot {{
+                width: 0.42rem;
+                height: 0.42rem;
                 border-radius: 999px;
                 background: var(--chain-gradient);
                 box-shadow: 0 0 0 3px var(--chain-soft);
                 flex: 0 0 auto;
+            }}
+            .sidebar-utc-note {{
+                margin-top: 0.4rem;
+                padding-top: 0.62rem;
+                border-top: 1px solid rgba(128, 128, 128, 0.16);
+                color: #8a8f98;
+                font-size: 0.76rem;
+                line-height: 1.25rem;
+            }}
+
+            /* Sélecteur SOL / ETH / BTC : boutons compacts, sans radio natif. */
+            .st-key-sidebar_network_selector {{
+                margin-top: 0.15rem;
+                margin-bottom: 0.05rem;
+            }}
+            .st-key-sidebar_network_selector [data-testid="stButton"] {{
+                flex: 1 1 0 !important;
+                min-width: 0 !important;
+            }}
+            .st-key-sidebar_network_selector [data-testid="stButton"] > button {{
+                width: 100% !important;
+                min-height: 2.18rem !important;
+                padding: 0.26rem 0.5rem !important;
+                border: 1px solid rgba(128, 128, 128, 0.20) !important;
+                border-radius: 9px !important;
+                background: transparent !important;
+                color: inherit !important;
+                box-shadow: none !important;
+                font-size: 0.82rem !important;
+                font-weight: 650 !important;
+            }}
+            .st-key-sidebar_network_selector [data-testid="stButton"] > button:hover {{
+                border-color: var(--chain-ring) !important;
+                color: var(--chain-accent) !important;
+                background: var(--chain-soft) !important;
+            }}
+            .st-key-network_select_${network.toLowerCase()} [data-testid="stButton"] > button {{
+                border-color: var(--chain-ring) !important;
+                background: var(--chain-soft) !important;
+                color: var(--chain-accent) !important;
+                box-shadow: inset 0 -2px 0 var(--chain-accent) !important;
+                font-weight: 750 !important;
+            }}
+
+            /* Réduit l'espace perdu dans le panneau latéral, surtout sur mobile. */
+            .st-key-sidebar_network_panel {{
+                margin-top: -0.15rem;
+            }}
+            .st-key-sidebar_network_panel [data-testid="stVerticalBlock"] {{
+                gap: 0.38rem !important;
+            }}
+            @media (max-width: 768px) {{
+                section[data-testid="stSidebar"] {{
+                    width: min(76vw, 300px) !important;
+                    min-width: min(76vw, 300px) !important;
+                    max-width: min(76vw, 300px) !important;
+                }}
+                section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+                    padding-top: 2.25rem !important;
+                    padding-left: 1rem !important;
+                    padding-right: 1rem !important;
+                }}
+                .sidebar-network-title {{
+                    font-size: 1.08rem;
+                }}
+                .sidebar-utc-note {{
+                    margin-top: 0.28rem;
+                    padding-top: 0.5rem;
+                }}
             }}
 
             /* Ligne d'identité très légère sous le titre principal. */
@@ -213,11 +288,6 @@ def apply_network_theme(network: str) -> None:
                 border-top: 2px solid var(--chain-accent);
             }}
 
-            /* Radio du réseau : texte sélectionné aux couleurs de la chaîne. */
-            div[role="radiogroup"] label:has(input:checked) {{
-                color: var(--chain-accent) !important;
-                font-weight: 650;
-            }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -618,30 +688,56 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.sidebar:
-    st.header("Réseau")
-    network = st.radio(
-        "Blockchain",
-        ["Solana", "Ethereum", "Bitcoin"],
-        index=0,
-    )
+if st.session_state.get("selected_network") not in NETWORK_THEMES:
+    st.session_state["selected_network"] = "Solana"
 
+
+def select_network(network_name: str) -> None:
+    st.session_state["selected_network"] = network_name
+
+
+with st.sidebar:
+    network = st.session_state["selected_network"]
     apply_network_theme(network)
     network_theme = NETWORK_THEMES[network]
-    st.markdown(
-        (
-            '<div class="network-badge">'
-            '<span class="network-badge-dot"></span>'
-            f'{network_theme["symbol"]} · disponible'
-            "</div>"
-        ),
-        unsafe_allow_html=True,
-    )
 
-    st.divider()
-    st.caption(
-        "Toutes les dates et heures de recherche sont interprétées en UTC."
-    )
+    with st.container(key="sidebar_network_panel"):
+        st.markdown(
+            '<div class="sidebar-network-title">Réseau</div>',
+            unsafe_allow_html=True,
+        )
+
+        with st.container(
+            key="sidebar_network_selector",
+            horizontal=True,
+            gap="small",
+        ):
+            for network_name in ("Solana", "Ethereum", "Bitcoin"):
+                st.button(
+                    NETWORK_THEMES[network_name]["symbol"],
+                    key=f"network_select_{network_name.lower()}",
+                    type="secondary",
+                    use_container_width=True,
+                    on_click=select_network,
+                    args=(network_name,),
+                )
+
+        st.markdown(
+            (
+                '<div class="sidebar-network-status">'
+                '<span class="sidebar-network-status-dot"></span>'
+                f'<strong>{network_theme["symbol"]}</strong>'
+                "<span>disponible</span>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="sidebar-utc-note">'
+            "Dates et heures interprétées en UTC."
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
 now_utc = datetime.now(timezone.utc)
 
