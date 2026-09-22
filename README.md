@@ -130,6 +130,7 @@ Bitcoin n'associe pas un timestamp on-chain individuel à chaque transaction con
 Le moteur :
 
 - localise les blocs proches de la fenêtre UTC ;
+- si aucun bloc n'est horodaté dans une fenêtre courte, analyse le **bloc le plus proche** et affiche explicitement l'écart temporel ;
 - télécharge le **bloc brut** ;
 - parse localement ses transactions pour limiter le nombre d'appels réseau ;
 - prend en charge les transactions legacy et SegWit ;
