@@ -332,7 +332,7 @@ def search_solana_window(
                         "transactionDetails": "full",
                         "rewards": False,
                         "commitment": "finalized",
-                        "maxSupportedTransactionVersion": 0,
+                        "maxSupportedTransactionVersion": 1,
                     },
                 ],
             )
