@@ -720,6 +720,30 @@ if result and result.get("network") == network:
             "sont recherchés dans les sorties (vout) en satoshis."
         )
 
+        if result.get("time_fallback_used"):
+            offset_seconds = abs(
+                int(result.get("time_fallback_offset_seconds") or 0)
+            )
+            offset_minutes, offset_remainder = divmod(offset_seconds, 60)
+            block_timestamp = result.get("time_fallback_block_timestamp")
+            if block_timestamp is not None:
+                fallback_dt = datetime.fromtimestamp(
+                    int(block_timestamp),
+                    tz=timezone.utc,
+                )
+                fallback_time_label = fallback_dt.strftime(
+                    "%d/%m/%Y %H:%M:%S UTC"
+                )
+            else:
+                fallback_time_label = "heure inconnue"
+
+            st.warning(
+                "Aucun bloc Bitcoin n'a été horodaté dans la fenêtre demandée. "
+                f"Le bloc le plus proche (#{result.get('time_fallback_block')}, "
+                f"{fallback_time_label}) a donc été analysé "
+                f"· écart {offset_minutes} min {offset_remainder} s."
+            )
+
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Blocs analysés", result["analyzed_blocks"])
     m2.metric("Transactions", len(result["transactions"]))

@@ -5,6 +5,7 @@ from bitcoin_engine import (
     _decode_output_destination,
     _parse_block,
     _parse_transaction,
+    _select_candidate_blocks,
 )
 
 
@@ -107,6 +108,40 @@ class BitcoinEngineTests(unittest.TestCase):
             block_transactions[0]["txid"],
             parsed["txid"],
         )
+
+    def test_candidate_blocks_use_exact_window_when_available(self):
+        blocks = [
+            {"height": 100, "timestamp": 1_000},
+            {"height": 101, "timestamp": 1_600},
+            {"height": 102, "timestamp": 2_200},
+        ]
+
+        selected, fallback = _select_candidate_blocks(
+            blocks,
+            start_ts=1_550,
+            end_ts=1_650,
+            center_ts=1_600,
+        )
+
+        self.assertFalse(fallback)
+        self.assertEqual([block["height"] for block in selected], [101])
+
+    def test_candidate_blocks_fall_back_to_nearest_block(self):
+        blocks = [
+            {"height": 100, "timestamp": 1_000},
+            {"height": 101, "timestamp": 1_600},
+            {"height": 102, "timestamp": 2_200},
+        ]
+
+        selected, fallback = _select_candidate_blocks(
+            blocks,
+            start_ts=1_850,
+            end_ts=1_950,
+            center_ts=1_900,
+        )
+
+        self.assertTrue(fallback)
+        self.assertEqual([block["height"] for block in selected], [101])
 
     def test_segwit_txid_excludes_witness(self):
         version = (2).to_bytes(
