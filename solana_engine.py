@@ -717,7 +717,13 @@ def search_solana_window(
                 )
 
                 if owner and owner in signer_addresses:
-                    owner_asset_deltas[(owner, asset, mint)] += delta
+                    if mint == WSOL_MINT:
+                        # Pour l'analyse économique, SOL et Wrapped SOL sont
+                        # le même actif. Cela évite de classer un wrap/unwrap
+                        # technique comme un swap utilisateur.
+                        owner_asset_deltas[(owner, "SOL", "")] += delta
+                    else:
+                        owner_asset_deltas[(owner, asset, mint)] += delta
 
             # Un même signataire qui perd un actif et en reçoit un autre est
             # présenté comme un échange probable. Cette heuristique ne dépend
