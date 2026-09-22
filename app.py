@@ -204,6 +204,7 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
         table,
         use_container_width=True,
         hide_index=True,
+        lazy=True,
         column_config={
             "Explorateur": st.column_config.LinkColumn(
                 "Explorateur",
@@ -215,6 +216,80 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
             ),
         },
     )
+
+
+def paginate_rows(
+    rows: list[dict],
+    *,
+    key_prefix: str,
+) -> tuple[list[dict], int, int, int]:
+    if not rows:
+        return [], 1, 1, 100
+
+    controls_left, controls_right = st.columns([2, 1])
+    with controls_left:
+        page_size = st.selectbox(
+            "Lignes par page",
+            [100, 250, 500],
+            index=0,
+            key=f"{key_prefix}_page_size",
+        )
+
+    total_pages = max(1, (len(rows) + page_size - 1) // page_size)
+    page_options = list(range(1, total_pages + 1))
+    page_key = f"{key_prefix}_page"
+
+    if st.session_state.get(page_key) not in page_options:
+        st.session_state[page_key] = 1
+
+    with controls_right:
+        page = st.selectbox(
+            "Page",
+            page_options,
+            key=page_key,
+        )
+
+    start = (page - 1) * page_size
+    end = min(start + page_size, len(rows))
+    return rows[start:end], page, total_pages, page_size
+
+
+def render_downloads(
+    filtered_rows: list[dict],
+    page_rows: list[dict],
+    *,
+    filename: str,
+    key_prefix: str,
+) -> None:
+    if not page_rows:
+        return
+
+    st.download_button(
+        "Télécharger la page affichée CSV",
+        data=to_csv_bytes(page_rows),
+        file_name=filename,
+        mime="text/csv",
+        key=f"{key_prefix}_page_csv",
+    )
+
+    if len(filtered_rows) > len(page_rows):
+        prepare_full = st.checkbox(
+            f"Préparer le CSV complet ({len(filtered_rows)} lignes)",
+            value=False,
+            key=f"{key_prefix}_prepare_full_csv",
+            help=(
+                "La génération complète consomme davantage de mémoire. "
+                "Elle n'est effectuée que si cette case est cochée."
+            ),
+        )
+        if prepare_full:
+            st.download_button(
+                "Télécharger toutes les lignes filtrées CSV",
+                data=to_csv_bytes(filtered_rows),
+                file_name=filename.replace(".csv", "_complet.csv"),
+                mime="text/csv",
+                key=f"{key_prefix}_full_csv",
+            )
 
 
 def filter_rows(
@@ -431,9 +506,8 @@ if result:
     m4.metric("Résultats exacts", len(result["matches"]))
 
     if result["target_amount"] is not None:
-        target_label = (
-            f"{result['target_amount']} {result['target_asset']}"
-        )
+        target_label = f"{result['target_amount']} {result['target_asset']}"
+        st.caption(f"Critère recherché : **{target_label}**")
 
         if result["matches"]:
             st.success(
@@ -447,163 +521,133 @@ if result:
                 "toute la période."
             )
 
-    st.markdown("#### Filtrer les données")
-    search_col, status_col = st.columns([4.5, 1.2])
-
-    with search_col:
-        global_query = st.text_input(
-            "Recherche",
-            placeholder="Hash, adresse, montant, actif, bloc, heure…",
-            key="global_result_search",
-            help=(
-                "Cette recherche s'applique aux onglets Résultats, "
-                "Transactions, Opérations et Variations de solde."
-            ),
-        )
-
-    with status_col:
-        st.markdown(
-            "<div style='height: 1.72rem;'></div>",
-            unsafe_allow_html=True,
-        )
-        only_success = st.checkbox(
-            "Réussies uniquement",
-            value=False,
-            key="tx_success_only",
-            help="Ce filtre s'applique à l'onglet Transactions.",
-        )
-
-    filtered_matches = filter_rows(result["matches"], global_query)
-    filtered_transactions = filter_rows(
-        result["transactions"],
-        global_query,
-        only_success=only_success,
-    )
-    filtered_operations = filter_rows(result["operations"], global_query)
-    filtered_movements = filter_rows(result["movements"], global_query)
-
-    (
-        tab_matches,
-        tab_tx,
-        tab_operations,
-        tab_movements,
-        tab_details,
-    ) = st.tabs(
+    st.markdown("#### Vue des données")
+    view = st.radio(
+        "Vue",
         [
             "🎯 Résultats",
             "🧾 Transactions",
             "💸 Opérations",
             "📊 Variations de solde",
             "ℹ️ Résumé de la recherche",
-        ]
+        ],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="result_view",
     )
 
-    with tab_matches:
-        st.caption(
-            "Correspondances exactes avec le montant et l'actif renseignés."
-        )
+    if view != "ℹ️ Résumé de la recherche":
+        st.markdown("#### Filtrer les données")
 
-        if result["target_amount"] is None:
-            st.info(
-                "Aucun montant n'a été renseigné. "
-                "Consultez Transactions ou Opérations pour parcourir "
-                "toute la période."
-            )
-        else:
-            show_table(
-                filtered_matches,
-                table_kind="matches",
-                empty_message="Aucun résultat exact trouvé.",
+        filter_col, status_col = st.columns([4.5, 1.2])
+        with filter_col:
+            global_query = st.text_input(
+                "Recherche",
+                placeholder="Hash, adresse, montant, actif, bloc, heure…",
+                key="global_result_search",
+                help=(
+                    "Le même filtre est conservé lorsque vous changez de vue."
+                ),
             )
 
-            if filtered_matches:
-                st.download_button(
-                    "Télécharger les résultats affichés CSV",
-                    data=to_csv_bytes(filtered_matches),
-                    file_name="solana_matches.csv",
-                    mime="text/csv",
+        with status_col:
+            if view == "🧾 Transactions":
+                st.markdown(
+                    "<div style='height: 1.72rem;'></div>",
+                    unsafe_allow_html=True,
                 )
+                only_success = st.checkbox(
+                    "Réussies uniquement",
+                    value=False,
+                    key="tx_success_only",
+                )
+            else:
+                only_success = False
 
-    with tab_tx:
-        st.caption(
-            "Toutes les transactions de la fenêtre, même lorsqu'aucune "
-            "opération simple ou aucun montant précis n'a pu être identifié. "
-            "« — » signifie qu'aucune opération utilisateur claire n'a été "
-            "détectée automatiquement."
-        )
-        st.caption(
-            f"{len(filtered_transactions)} transaction(s) affichée(s) "
-            f"sur {len(result['transactions'])}."
-        )
-
-        show_table(
-            filtered_transactions,
-            table_kind="transactions",
-            empty_message="Aucune transaction ne correspond à la recherche.",
-        )
-
-        if filtered_transactions:
-            st.download_button(
-                "Télécharger les transactions affichées CSV",
-                data=to_csv_bytes(filtered_transactions),
-                file_name="solana_transactions.csv",
-                mime="text/csv",
+        if view == "🎯 Résultats":
+            source_rows = result["matches"]
+            table_kind = "matches"
+            key_prefix = "matches"
+            filename = "solana_matches.csv"
+            empty_message = "Aucun résultat exact trouvé."
+            intro = (
+                "Correspondances exactes avec le montant et l'actif renseignés."
             )
 
-    with tab_operations:
-        st.caption(
-            "Opérations lisibles détectées automatiquement : transferts SOL, "
-            "transferts de tokens et swaps probables. "
-            "Un « swap probable » est déduit des variations nettes d'actifs "
-            "du même compte ; il ne dépend pas d'un DEX particulier."
-        )
-        st.caption(
-            f"{len(filtered_operations)} opération(s) affichée(s) "
-            f"sur {len(result['operations'])}."
-        )
-
-        show_table(
-            filtered_operations,
-            table_kind="operations",
-            empty_message="Aucune opération ne correspond à la recherche.",
-        )
-
-        if filtered_operations:
-            st.download_button(
-                "Télécharger les opérations affichées CSV",
-                data=to_csv_bytes(filtered_operations),
-                file_name="solana_operations.csv",
-                mime="text/csv",
+        elif view == "🧾 Transactions":
+            source_rows = result["transactions"]
+            table_kind = "transactions"
+            key_prefix = "transactions"
+            filename = "solana_transactions.csv"
+            empty_message = "Aucune transaction ne correspond à la recherche."
+            intro = (
+                "Toutes les transactions de la fenêtre. « — » signifie "
+                "qu'aucune opération utilisateur claire n'a été détectée."
             )
 
-    with tab_movements:
-        st.caption(
-            "Vue de contrôle : variations de solde SOL et tokens observées "
-            "avant/après les transactions. Une variation n'est pas "
-            "nécessairement une opération distincte."
-        )
-        st.caption(
-            f"{len(filtered_movements)} variation(s) affichée(s) "
-            f"sur {len(result['movements'])}."
-        )
+        elif view == "💸 Opérations":
+            source_rows = result["operations"]
+            table_kind = "operations"
+            key_prefix = "operations"
+            filename = "solana_operations.csv"
+            empty_message = "Aucune opération ne correspond à la recherche."
+            intro = (
+                "Transferts SOL, transferts de tokens et swaps probables "
+                "détectés automatiquement."
+            )
 
-        show_table(
-            filtered_movements,
-            table_kind="movements",
-            empty_message=(
+        else:
+            source_rows = result["movements"]
+            table_kind = "movements"
+            key_prefix = "movements"
+            filename = "solana_movements.csv"
+            empty_message = (
                 "Aucune variation de solde ne correspond à la recherche."
-            ),
-        )
-
-        if filtered_movements:
-            st.download_button(
-                "Télécharger les variations affichées CSV",
-                data=to_csv_bytes(filtered_movements),
-                file_name="solana_movements.csv",
-                mime="text/csv",
+            )
+            intro = (
+                "Variations de solde SOL et tokens avant/après les transactions."
             )
 
-    with tab_details:
+        st.caption(intro)
+
+        filtered_rows = filter_rows(
+            source_rows,
+            global_query,
+            only_success=only_success,
+        )
+
+        st.caption(
+            f"{len(filtered_rows)} ligne(s) après filtre "
+            f"sur {len(source_rows)}."
+        )
+
+        page_rows, page, total_pages, page_size = paginate_rows(
+            filtered_rows,
+            key_prefix=key_prefix,
+        )
+
+        if filtered_rows:
+            start_row = (page - 1) * page_size + 1
+            end_row = min(page * page_size, len(filtered_rows))
+            st.caption(
+                f"Affichage {start_row}–{end_row} "
+                f"· page {page}/{total_pages}"
+            )
+
+        show_table(
+            page_rows,
+            table_kind=table_kind,
+            empty_message=empty_message,
+        )
+
+        render_downloads(
+            filtered_rows,
+            page_rows,
+            filename=filename,
+            key_prefix=key_prefix,
+        )
+
+    else:
         left, right = st.columns(2)
 
         with left:
@@ -625,7 +669,6 @@ if result:
             )
 
         st.caption(
-            "L'analyse des tokens et des swaps utilise les métadonnées "
-            "déjà présentes dans les blocs téléchargés. "
-            "Elle n'ajoute pas de requête RPC par opération."
+            "Une seule table est rendue à la fois afin de limiter la mémoire "
+            "serveur et la charge du navigateur sur les recherches volumineuses."
         )
