@@ -434,6 +434,42 @@ def _explorer_links(txid: str) -> tuple[str, str]:
     )
 
 
+def _select_candidate_blocks(
+    blocks: list[dict[str, Any]],
+    *,
+    start_ts: int,
+    end_ts: int,
+    center_ts: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    """
+    Sélectionne les blocs horodatés dans la fenêtre demandée.
+
+    Si aucun bloc Bitcoin ne tombe dans cette fenêtre, conserve le bloc
+    temporellement le plus proche. Bitcoin n'horodate pas chaque transaction :
+    sans ce repli, une fenêtre courte (par exemple ±30 s) est très souvent vide
+    alors qu'un bloc pertinent se trouve quelques minutes avant ou après.
+    """
+    in_window = [
+        block
+        for block in blocks
+        if start_ts <= int(block.get("timestamp", 0)) <= end_ts
+    ]
+    if in_window:
+        return in_window, False
+
+    if not blocks:
+        return [], False
+
+    nearest = min(
+        blocks,
+        key=lambda block: (
+            abs(int(block.get("timestamp", 0)) - center_ts),
+            int(block.get("height", 0)),
+        ),
+    )
+    return [nearest], True
+
+
 def search_bitcoin_window(
     search_date: date,
     search_time: dt_time,
@@ -712,29 +748,50 @@ def search_bitcoin_window(
         + BOUNDARY_BLOCK_MARGIN,
     )
 
-    candidate_meta: list[
+    scanned_meta: list[
         dict[str, Any]
     ] = []
     for height in range(
         scan_start,
         scan_end + 1,
     ):
-        block = block_at_height(height)
-        timestamp = int(
-            block.get("timestamp", 0)
+        scanned_meta.append(
+            block_at_height(height)
         )
-        if (
-            start_ts
-            <= timestamp
-            <= end_ts
-        ):
-            candidate_meta.append(block)
+
+    candidate_meta, time_fallback_used = (
+        _select_candidate_blocks(
+            scanned_meta,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            center_ts=int(center_dt.timestamp()),
+        )
+    )
 
     candidate_meta.sort(
         key=lambda block: int(
             block["height"]
         )
     )
+
+    time_fallback_offset_seconds: int | None = None
+    if time_fallback_used and candidate_meta:
+        fallback_block = candidate_meta[0]
+        time_fallback_offset_seconds = (
+            int(fallback_block.get("timestamp", 0))
+            - int(center_dt.timestamp())
+        )
+        fallback_dt = datetime.fromtimestamp(
+            int(fallback_block.get("timestamp", 0)),
+            tz=timezone.utc,
+        )
+        _notify(
+            status_callback,
+            "Aucun bloc Bitcoin n'est horodaté dans la fenêtre demandée. "
+            "Analyse du bloc le plus proche : "
+            f"{fallback_block.get('height')} "
+            f"({fallback_dt.strftime('%d/%m/%Y %H:%M:%S UTC')}).",
+        )
 
     if (
         len(candidate_meta)
@@ -1095,6 +1152,22 @@ def search_bitcoin_window(
             - scan_start
             + 1
             - total_candidates
+        ),
+        "time_fallback_used": (
+            time_fallback_used
+        ),
+        "time_fallback_offset_seconds": (
+            time_fallback_offset_seconds
+        ),
+        "time_fallback_block": (
+            int(candidate_meta[0]["height"])
+            if time_fallback_used and candidate_meta
+            else None
+        ),
+        "time_fallback_block_timestamp": (
+            int(candidate_meta[0]["timestamp"])
+            if time_fallback_used and candidate_meta
+            else None
         ),
         "analyzed_blocks": (
             analyzed_blocks
