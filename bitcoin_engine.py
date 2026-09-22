@@ -886,6 +886,9 @@ def search_bitcoin_window(
                     "block_time_utc": (
                         block_time
                     ),
+                    "transaction_index": (
+                        tx_index
+                    ),
                     "signature": txid,
                     "operation_type": (
                         "transfer"
@@ -950,6 +953,9 @@ def search_bitcoin_window(
                             "block": height,
                             "block_time_utc": (
                                 block_time
+                            ),
+                            "transaction_index": (
+                                tx_index
                             ),
                             "signature": txid,
                             "matched_amount": (
@@ -1050,15 +1056,15 @@ def search_bitcoin_window(
         reverse=True,
     )
     operations_rows.sort(
-        key=lambda row: int(
-            row.get("block", 0)
-        ),
+        key=reverse_key,
+        reverse=True,
+    )
+    movements_rows.sort(
+        key=reverse_key,
         reverse=True,
     )
     matches_rows.sort(
-        key=lambda row: int(
-            row.get("block", 0)
-        ),
+        key=reverse_key,
         reverse=True,
     )
 
