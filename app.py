@@ -89,6 +89,60 @@ st.markdown(
                 color: rgba(250, 250, 250, 0.86);
             }
         }
+
+        /* Sidebar réseau : compacte sur desktop et nettement plus légère
+           sur les petits écrans. */
+        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            padding-top: 1.35rem;
+        }
+        .sidebar-network-title {
+            margin: 0 0 0.55rem 0;
+            font-size: 1.55rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+        .network-availability {
+            display: flex;
+            align-items: center;
+            gap: 0.42rem;
+            margin: 0.52rem 0 0.35rem 0;
+            font-size: 0.78rem;
+            color: #8a8f98;
+        }
+        .network-availability-dot {
+            width: 0.42rem;
+            height: 0.42rem;
+            border-radius: 999px;
+            flex: 0 0 auto;
+        }
+        .network-utc-note {
+            margin-top: 0.75rem;
+            font-size: 0.78rem;
+            line-height: 1.35rem;
+            color: #8a8f98;
+        }
+
+        @media (max-width: 768px) {
+            section[data-testid="stSidebar"] {
+                width: min(82vw, 300px) !important;
+                min-width: min(82vw, 300px) !important;
+            }
+            section[data-testid="stSidebar"] > div:first-child {
+                width: 100% !important;
+            }
+            section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+                padding-top: 1rem;
+                padding-left: 1.15rem;
+                padding-right: 1.15rem;
+            }
+            .sidebar-network-title {
+                font-size: 1.35rem;
+                margin-bottom: 0.45rem;
+            }
+            .network-utc-note {
+                margin-top: 0.65rem;
+            }
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -140,28 +194,44 @@ def apply_network_theme(network: str) -> None:
                 --chain-gradient: {theme["gradient"]};
             }}
 
-            /* Identité réseau : visible, mais limitée aux accents UI. */
-            .network-badge {{
-                display: inline-flex;
-                align-items: center;
-                gap: 0.48rem;
-                margin-top: 0.2rem;
-                padding: 0.3rem 0.68rem;
-                border: 1px solid var(--chain-ring);
-                border-radius: 999px;
-                background: var(--chain-soft);
-                color: var(--chain-accent);
-                font-size: 0.82rem;
-                font-weight: 650;
-                line-height: 1.2rem;
+            /* Sélecteur réseau compact : l'état actif reprend la couleur
+               de la blockchain, sans radio ni badge redondant. */
+            .st-key-network_selector [data-testid="stSegmentedControl"] {{
+                width: 100%;
             }}
-            .network-badge-dot {{
-                width: 0.48rem;
-                height: 0.48rem;
-                border-radius: 999px;
+            .st-key-network_selector [data-testid="stSegmentedControl"] > div {{
+                width: 100%;
+                gap: 0.38rem;
+                background: transparent !important;
+            }}
+            .st-key-network_selector button {{
+                flex: 1 1 0;
+                min-width: 0 !important;
+                min-height: 2.15rem !important;
+                padding: 0.35rem 0.55rem !important;
+                border: 1px solid rgba(128, 128, 128, 0.22) !important;
+                border-radius: 999px !important;
+                background: transparent !important;
+                box-shadow: none !important;
+                font-size: 0.78rem !important;
+                font-weight: 650 !important;
+            }}
+            .st-key-network_selector button:hover {{
+                border-color: var(--chain-accent) !important;
+                color: var(--chain-accent) !important;
+            }}
+            .st-key-network_selector button[aria-pressed="true"] {{
+                border-color: var(--chain-ring) !important;
+                background: var(--chain-soft) !important;
+                color: var(--chain-accent) !important;
+                box-shadow: inset 0 -2px 0 var(--chain-accent) !important;
+            }}
+            .network-availability {{
+                color: var(--chain-accent);
+            }}
+            .network-availability-dot {{
                 background: var(--chain-gradient);
                 box-shadow: 0 0 0 3px var(--chain-soft);
-                flex: 0 0 auto;
             }}
 
             /* Ligne d'identité très légère sous le titre principal. */
@@ -213,11 +283,6 @@ def apply_network_theme(network: str) -> None:
                 border-top: 2px solid var(--chain-accent);
             }}
 
-            /* Radio du réseau : texte sélectionné aux couleurs de la chaîne. */
-            div[role="radiogroup"] label:has(input:checked) {{
-                color: var(--chain-accent) !important;
-                font-weight: 650;
-            }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -619,28 +684,36 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.header("Réseau")
-    network = st.radio(
-        "Blockchain",
-        ["Solana", "Ethereum", "Bitcoin"],
-        index=0,
+    st.markdown(
+        '<div class="sidebar-network-title">Réseau</div>',
+        unsafe_allow_html=True,
     )
+
+    network_options = ["Solana", "Ethereum", "Bitcoin"]
+    network = st.segmented_control(
+        "Réseau blockchain",
+        network_options,
+        default="Solana",
+        format_func=lambda value: NETWORK_THEMES[value]["symbol"],
+        key="network_selector",
+        label_visibility="collapsed",
+    )
+    if network is None:
+        network = "Solana"
 
     apply_network_theme(network)
     network_theme = NETWORK_THEMES[network]
     st.markdown(
         (
-            '<div class="network-badge">'
-            '<span class="network-badge-dot"></span>'
-            f'{network_theme["symbol"]} · disponible'
+            '<div class="network-availability">'
+            '<span class="network-availability-dot"></span>'
+            f'<span>{network_theme["symbol"]} disponible</span>'
+            "</div>"
+            '<div class="network-utc-note">'
+            "Toutes les heures sont interprétées en UTC."
             "</div>"
         ),
         unsafe_allow_html=True,
-    )
-
-    st.divider()
-    st.caption(
-        "Toutes les dates et heures de recherche sont interprétées en UTC."
     )
 
 now_utc = datetime.now(timezone.utc)
