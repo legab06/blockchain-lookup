@@ -5,6 +5,7 @@ from datetime import datetime, time, timezone
 import pandas as pd
 import streamlit as st
 
+from ethereum_engine import EthereumSearchError, search_ethereum_window
 from solana_engine import SolanaSearchError, search_solana_window
 
 
@@ -108,6 +109,7 @@ DISPLAY_COLUMN_LABELS = {
     "signature": "Transaction",
     "status": "Statut",
     "fee_sol": "Frais (SOL)",
+    "fee_eth": "Frais (ETH)",
     "account_count": "Nb. de comptes",
     "accounts": "Comptes concernés",
     "operation_count": "Nb. d'opérations",
@@ -131,7 +133,7 @@ DISPLAY_COLUMN_LABELS = {
     "match_target": "Montant recherché ?",
     "error": "Erreur",
     "explorer": "Explorateur",
-    "solscan": "Solscan",
+    "secondary_explorer": "Explorateur secondaire",
 }
 
 TABLE_COLUMNS = {
@@ -148,7 +150,7 @@ TABLE_COLUMNS = {
         "account",
         "signature",
         "detail",
-        "solscan",
+        "secondary_explorer",
         "explorer",
         "block",
     ],
@@ -159,9 +161,10 @@ TABLE_COLUMNS = {
         "status",
         "signature",
         "fee_sol",
+        "fee_eth",
         "account_count",
         "accounts",
-        "solscan",
+        "secondary_explorer",
         "explorer",
         "block",
         "transaction_index",
@@ -178,7 +181,7 @@ TABLE_COLUMNS = {
         "evidence",
         "signature",
         "detail",
-        "solscan",
+        "secondary_explorer",
         "explorer",
         "block",
     ],
@@ -190,14 +193,14 @@ TABLE_COLUMNS = {
         "account",
         "signature",
         "match_target",
-        "solscan",
+        "secondary_explorer",
         "explorer",
         "block",
     ],
 }
 
 OPERATION_TYPE_LABELS = {
-    "transfer": "Transfert SOL",
+    "transfer": "Transfert natif",
     "token_transfer": "Transfert de token",
     "swap_probable": "Swap probable",
     "balance_delta": "Variation de solde",
@@ -208,6 +211,8 @@ def localize_rows(rows: list[dict]) -> list[dict]:
     localized: list[dict] = []
     for row in rows:
         item = dict(row)
+        if item.get("solscan") and not item.get("secondary_explorer"):
+            item["secondary_explorer"] = item["solscan"]
         if "operation_type" in item:
             item["operation_type"] = OPERATION_TYPE_LABELS.get(
                 item["operation_type"],
@@ -222,17 +227,28 @@ def localize_rows(rows: list[dict]) -> list[dict]:
     return localized
 
 
-def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None:
+def show_table(
+    rows: list[dict],
+    *,
+    table_kind: str,
+    empty_message: str,
+    network: str,
+) -> None:
     if not rows:
         st.info(empty_message)
         return
 
     columns = TABLE_COLUMNS[table_kind]
-    table = (
-        pd.DataFrame(localize_rows(rows))
-        .reindex(columns=columns)
-        .rename(columns=DISPLAY_COLUMN_LABELS)
-    )
+    labels = dict(DISPLAY_COLUMN_LABELS)
+    if network == "Solana":
+        labels["explorer"] = "Solana Explorer"
+        labels["secondary_explorer"] = "Solscan"
+    elif network == "Ethereum":
+        labels["explorer"] = "Etherscan"
+        labels["secondary_explorer"] = "Blockscout"
+
+    table = pd.DataFrame(localize_rows(rows)).reindex(columns=columns)
+    table = table.dropna(axis=1, how="all").rename(columns=labels)
 
     if "Statut" in table:
         table["Statut"] = table["Statut"].replace(
@@ -256,12 +272,12 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
         hide_index=True,
         lazy=True,
         column_config={
-            "Explorateur": st.column_config.LinkColumn(
-                "Explorateur",
+            labels["explorer"]: st.column_config.LinkColumn(
+                labels["explorer"],
                 display_text="Ouvrir",
             ),
-            "Solscan": st.column_config.LinkColumn(
-                "Solscan",
+            labels["secondary_explorer"]: st.column_config.LinkColumn(
+                labels["secondary_explorer"],
                 display_text="Ouvrir",
             ),
         },
@@ -468,6 +484,8 @@ with st.sidebar:
 
     if network == "Solana":
         st.success("SOL · disponible")
+    elif network == "Ethereum":
+        st.success("ETH · disponible")
     else:
         st.info(f"{network} · module à ajouter")
 
@@ -534,9 +552,14 @@ with st.form("lookup_form", border=True):
         )
 
     with asset_col:
+        asset_options = {
+            "Solana": ["SOL", "USDC", "USDT"],
+            "Ethereum": ["ETH", "USDC", "USDT"],
+            "Bitcoin": ["BTC"],
+        }[network]
         asset = st.selectbox(
             "Actif",
-            ["SOL", "USDC", "USDT"],
+            asset_options,
             index=0,
             help="Actif auquel correspond le montant communiqué.",
         )
@@ -548,46 +571,58 @@ with st.form("lookup_form", border=True):
     )
 
 if submitted:
-    if network != "Solana":
+    if network == "Bitcoin":
         st.warning(
-            f"Le moteur {network} n'est pas encore branché. "
-            "Pour l'instant, sélectionnez Solana."
+            "Le moteur Bitcoin n'est pas encore branché. "
+            "Sélectionnez Solana ou Ethereum."
         )
     else:
         progress_bar = st.progress(0, text="Initialisation…")
 
         with st.status(
-            "Recherche Solana en cours…",
+            f"Recherche {network} en cours…",
             expanded=True,
         ) as status_box:
 
             def on_status(message: str) -> None:
                 status_box.write(message)
 
-            def on_progress(current: int, total: int, slot: int) -> None:
+            def on_progress(current: int, total: int, block_number: int) -> None:
                 if total <= 0:
                     progress_bar.progress(0, text="Aucun bloc candidat")
                     return
 
                 ratio = min(max(current / total, 0.0), 1.0)
+                unit = "slot" if network == "Solana" else "bloc"
                 progress_bar.progress(
                     ratio,
                     text=(
                         f"Analyse des blocs : {current}/{total} "
-                        f"· slot {slot}"
+                        f"· {unit} {block_number}"
                     ),
                 )
 
             try:
-                result = search_solana_window(
-                    search_date=search_date,
-                    search_time=search_time,
-                    tolerance_seconds=int(tolerance),
-                    amount_sol=amount,
-                    asset_symbol=asset,
-                    progress_callback=on_progress,
-                    status_callback=on_status,
-                )
+                if network == "Solana":
+                    result = search_solana_window(
+                        search_date=search_date,
+                        search_time=search_time,
+                        tolerance_seconds=int(tolerance),
+                        amount_sol=amount,
+                        asset_symbol=asset,
+                        progress_callback=on_progress,
+                        status_callback=on_status,
+                    )
+                else:
+                    result = search_ethereum_window(
+                        search_date=search_date,
+                        search_time=search_time,
+                        tolerance_seconds=int(tolerance),
+                        amount_eth=amount,
+                        asset_symbol=asset,
+                        progress_callback=on_progress,
+                        status_callback=on_status,
+                    )
             except ValueError as exc:
                 status_box.update(
                     label="Paramètres invalides",
@@ -595,7 +630,7 @@ if submitted:
                     expanded=True,
                 )
                 st.error(str(exc))
-            except SolanaSearchError as exc:
+            except (SolanaSearchError, EthereumSearchError) as exc:
                 status_box.update(
                     label="Erreur pendant la recherche",
                     state="error",
@@ -616,11 +651,11 @@ if submitted:
                     state="complete",
                     expanded=False,
                 )
-                st.session_state["solana_result"] = result
+                st.session_state["lookup_result"] = result
 
-result = st.session_state.get("solana_result")
+result = st.session_state.get("lookup_result")
 
-if result:
+if result and result.get("network") == network:
     st.divider()
     st.subheader("Résultats de la recherche")
 
@@ -656,11 +691,16 @@ if result:
             )
 
     st.markdown("#### Vue des données")
+    movement_view = (
+        "📊 Variations de solde"
+        if result["network"] == "Solana"
+        else "📊 Mouvements"
+    )
     view_options = [
         "🎯 Résultats",
         "🧾 Transactions",
         "💸 Opérations",
-        "📊 Variations de solde",
+        movement_view,
         "ℹ️ Résumé de la recherche",
     ]
     if st.session_state.get("result_view") not in view_options:
@@ -742,7 +782,7 @@ if result:
             source_rows = result["matches"]
             table_kind = "matches"
             key_prefix = "matches"
-            filename = "solana_matches.csv"
+            filename = f"{result['network'].lower()}_matches.csv"
             empty_message = "Aucun résultat exact trouvé."
             intro = (
                 "Correspondances exactes avec le montant et l'actif renseignés."
@@ -752,7 +792,7 @@ if result:
             source_rows = result["transactions"]
             table_kind = "transactions"
             key_prefix = "transactions"
-            filename = "solana_transactions.csv"
+            filename = f"{result['network'].lower()}_transactions.csv"
             empty_message = "Aucune transaction ne correspond à la recherche."
             intro = (
                 "Toutes les transactions de la fenêtre. « — » signifie "
@@ -763,24 +803,31 @@ if result:
             source_rows = result["operations"]
             table_kind = "operations"
             key_prefix = "operations"
-            filename = "solana_operations.csv"
+            filename = f"{result['network'].lower()}_operations.csv"
             empty_message = "Aucune opération ne correspond à la recherche."
+            native_symbol = "SOL" if result["network"] == "Solana" else "ETH"
             intro = (
-                "Transferts SOL, transferts de tokens et swaps probables "
-                "détectés automatiquement."
+                f"Transferts {native_symbol}, transferts de tokens et swaps "
+                "probables détectés automatiquement."
             )
 
         else:
             source_rows = result["movements"]
             table_kind = "movements"
             key_prefix = "movements"
-            filename = "solana_movements.csv"
+            filename = f"{result['network'].lower()}_movements.csv"
             empty_message = (
                 "Aucune variation de solde ne correspond à la recherche."
             )
-            intro = (
-                "Variations de solde SOL et tokens avant/après les transactions."
-            )
+            if result["network"] == "Solana":
+                intro = (
+                    "Variations de solde SOL et tokens avant/après les transactions."
+                )
+            else:
+                intro = (
+                    "Mouvements ETH et ERC-20 observables dans les transactions "
+                    "et leurs logs."
+                )
 
         st.caption(intro)
 
@@ -799,6 +846,7 @@ if result:
             page_rows,
             table_kind=table_kind,
             empty_message=empty_message,
+            network=result["network"],
         )
 
         render_pagination_footer(
@@ -820,17 +868,29 @@ if result:
         left, right = st.columns(2)
 
         with left:
-            st.write("**Borne de début**")
-            st.code(f"slot {result['start_slot']}")
-            st.write("**Borne de fin**")
-            st.code(f"slot {result['end_slot']}")
+            if result["network"] == "Solana":
+                st.write("**Borne de début**")
+                st.code(f"slot {result['start_slot']}")
+                st.write("**Borne de fin**")
+                st.code(f"slot {result['end_slot']}")
+            else:
+                st.write("**Borne de début**")
+                st.code(f"bloc {result['start_block']}")
+                st.write("**Borne de fin**")
+                st.code(f"bloc {result['end_block']}")
 
         with right:
             st.write("**Plage interrogée**")
-            st.code(
-                f"{result['query_start_slot']} → "
-                f"{result['query_end_slot']}"
-            )
+            if result["network"] == "Solana":
+                st.code(
+                    f"{result['query_start_slot']} → "
+                    f"{result['query_end_slot']}"
+                )
+            else:
+                st.code(
+                    f"{result['query_start_block']} → "
+                    f"{result['query_end_block']}"
+                )
             st.write("**Blocs candidats / ignorés**")
             st.code(
                 f"{result['candidate_blocks']} / "
