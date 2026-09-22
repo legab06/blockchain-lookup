@@ -205,6 +205,18 @@ with st.sidebar:
 
 now_utc = datetime.now(timezone.utc)
 
+# Initialise une seule fois les valeurs par défaut des widgets.
+# Ensuite Streamlit conserve les saisies de l'utilisateur entre les reruns.
+if "lookup_date" not in st.session_state:
+    st.session_state["lookup_date"] = now_utc.date()
+
+if "lookup_time" not in st.session_state:
+    st.session_state["lookup_time"] = time(
+        now_utc.hour,
+        now_utc.minute,
+        now_utc.second,
+    )
+
 with st.form("lookup_form", border=True):
     st.subheader("Critères de recherche")
     st.caption("Saisissez les éléments communiqués par le prestataire. Le montant est facultatif.")
@@ -214,15 +226,15 @@ with st.form("lookup_form", border=True):
     with col_date:
         search_date = st.date_input(
             "Date UTC",
-            value=now_utc.date(),
             format="DD/MM/YYYY",
+            key="lookup_date",
         )
 
     with col_time:
         search_time = st.time_input(
             "Heure approximative UTC",
-            value=time(now_utc.hour, now_utc.minute, now_utc.second),
             step=1,
+            key="lookup_time",
         )
 
     with col_tolerance:
