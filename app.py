@@ -142,6 +142,10 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
             {"SUCCESS": "Réussie", "FAILED": "Échouée"}
         )
 
+    for column in ("Montant(s) transféré(s)", "Expéditeur → destinataire"):
+        if column in table:
+            table[column] = table[column].replace("", "—").fillna("—")
+
     st.dataframe(
         table,
         use_container_width=True,
@@ -153,7 +157,13 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
     )
 
 
-def filter_transactions(rows: list[dict], query: str, only_success: bool) -> list[dict]:
+def filter_rows(
+    rows: list[dict],
+    query: str,
+    *,
+    only_success: bool = False,
+) -> list[dict]:
+    """Filtre libre sur toutes les valeurs d'une ligne."""
     query = query.strip().casefold()
     filtered: list[dict] = []
 
@@ -162,21 +172,7 @@ def filter_transactions(rows: list[dict], query: str, only_success: bool) -> lis
             continue
 
         if query:
-            searchable = " ".join(
-                str(row.get(key, ""))
-                for key in (
-                    "block",
-                    "block_time_utc",
-                    "signature",
-                    "status",
-                    "fee_sol",
-                    "accounts",
-                    "transfer_amounts_sol",
-                    "transfer_parties",
-                    "error",
-                )
-            ).casefold()
-
+            searchable = " ".join(str(value) for value in row.values()).casefold()
             if query not in searchable:
                 continue
 
@@ -322,6 +318,38 @@ if result:
                 "Consultez l’onglet Transactions pour examiner toutes les opérations de la période."
             )
 
+    st.markdown("#### Filtrer les données")
+    search_col, status_col = st.columns([4.5, 1.2])
+
+    with search_col:
+        global_query = st.text_input(
+            "Recherche",
+            placeholder="Hash, adresse, montant, bloc, heure…",
+            key="global_result_search",
+            help="Cette recherche s'applique aux onglets Résultats, Transactions, Transferts et Variations de solde.",
+        )
+
+    with status_col:
+        st.markdown(
+            "<div style='height: 1.72rem;'></div>",
+            unsafe_allow_html=True,
+        )
+        only_success = st.checkbox(
+            "Réussies uniquement",
+            value=False,
+            key="tx_success_only",
+            help="Ce filtre s'applique à l'onglet Transactions.",
+        )
+
+    filtered_matches = filter_rows(result["matches"], global_query)
+    filtered_transactions = filter_rows(
+        result["transactions"],
+        global_query,
+        only_success=only_success,
+    )
+    filtered_transfers = filter_rows(result["transfers"], global_query)
+    filtered_movements = filter_rows(result["movements"], global_query)
+
     tab_matches, tab_tx, tab_transfers, tab_movements, tab_details = st.tabs(
         [
             "🎯 Résultats",
@@ -338,7 +366,7 @@ if result:
             st.info("Aucun montant n'a été renseigné. Consultez Transactions pour parcourir toute la période.")
         else:
             match_rows = []
-            for row in result["matches"]:
+            for row in filtered_matches:
                 item = dict(row)
                 item["match_type"] = {
                     "instruction": "Transfert",
@@ -351,62 +379,50 @@ if result:
                 table_kind="matches",
                 empty_message="Aucun résultat exact trouvé.",
             )
-            if result["matches"]:
+            if filtered_matches:
                 st.download_button(
-                    "Télécharger les résultats CSV",
-                    data=to_csv_bytes(result["matches"]),
+                    "Télécharger les résultats affichés CSV",
+                    data=to_csv_bytes(filtered_matches),
                     file_name="solana_matches.csv",
                     mime="text/csv",
                 )
 
     with tab_tx:
         st.caption(
-            "Toutes les transactions trouvées dans la fenêtre, même si le montant ne correspond pas exactement."
+            "Toutes les transactions trouvées dans la fenêtre, même si le montant ne correspond pas exactement. "
+            "« — » signifie qu'aucun transfert SOL direct n'a été détecté dans la transaction."
         )
-
-        search_col, status_col = st.columns([3, 1])
-        with search_col:
-            tx_query = st.text_input(
-                "Rechercher dans les transactions",
-                placeholder="Hash, adresse, montant, bloc, heure…",
-                key="tx_search",
-            )
-        with status_col:
-            only_success = st.checkbox(
-                "Réussies uniquement",
-                value=False,
-                key="tx_success_only",
-            )
-
-        filtered_tx = filter_transactions(result["transactions"], tx_query, only_success)
         st.caption(
-            f"{len(filtered_tx)} transaction(s) affichée(s) sur {len(result['transactions'])}."
+            f"{len(filtered_transactions)} transaction(s) affichée(s) sur {len(result['transactions'])}."
         )
 
         show_table(
-            filtered_tx,
+            filtered_transactions,
             table_kind="transactions",
-            empty_message="Aucune transaction ne correspond à ce filtre.",
+            empty_message="Aucune transaction ne correspond à la recherche.",
         )
-        if result["transactions"]:
+        if filtered_transactions:
             st.download_button(
-                "Télécharger toutes les transactions CSV",
-                data=to_csv_bytes(result["transactions"]),
+                "Télécharger les transactions affichées CSV",
+                data=to_csv_bytes(filtered_transactions),
                 file_name="solana_transactions.csv",
                 mime="text/csv",
             )
 
     with tab_transfers:
         st.caption("Détail des transferts SOL explicitement détectés dans les transactions.")
-        show_table(
-            result["transfers"],
-            table_kind="transfers",
-            empty_message="Aucun transfert détecté.",
+        st.caption(
+            f"{len(filtered_transfers)} transfert(s) affiché(s) sur {len(result['transfers'])}."
         )
-        if result["transfers"]:
+        show_table(
+            filtered_transfers,
+            table_kind="transfers",
+            empty_message="Aucun transfert ne correspond à la recherche.",
+        )
+        if filtered_transfers:
             st.download_button(
-                "Télécharger les transferts CSV",
-                data=to_csv_bytes(result["transfers"]),
+                "Télécharger les transferts affichés CSV",
+                data=to_csv_bytes(filtered_transfers),
                 file_name="solana_transfers.csv",
                 mime="text/csv",
             )
@@ -416,15 +432,18 @@ if result:
             "Vue complémentaire : variations de solde des comptes impliqués. "
             "Un mouvement n'est pas nécessairement un transfert distinct."
         )
-        show_table(
-            result["movements"],
-            table_kind="movements",
-            empty_message="Aucune variation de solde détectée.",
+        st.caption(
+            f"{len(filtered_movements)} variation(s) affichée(s) sur {len(result['movements'])}."
         )
-        if result["movements"]:
+        show_table(
+            filtered_movements,
+            table_kind="movements",
+            empty_message="Aucune variation de solde ne correspond à la recherche.",
+        )
+        if filtered_movements:
             st.download_button(
-                "Télécharger les variations de solde CSV",
-                data=to_csv_bytes(result["movements"]),
+                "Télécharger les variations affichées CSV",
+                data=to_csv_bytes(filtered_movements),
                 file_name="solana_movements.csv",
                 mime="text/csv",
             )
