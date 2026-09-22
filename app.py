@@ -14,7 +14,7 @@ st.set_page_config(
     page_title="Blockchain Lookup",
     page_icon="🔎",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
@@ -90,57 +90,31 @@ st.markdown(
             }
         }
 
-        /* Sidebar réseau : compacte sur desktop et nettement plus légère
-           sur les petits écrans. */
-        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-            padding-top: 1.35rem;
-        }
-        .sidebar-network-title {
-            margin: 0 0 0.55rem 0;
-            font-size: 1.55rem;
+        /* Sélecteur réseau directement dans la page principale. */
+        .network-picker-label {
+            margin: -0.35rem 0 0.32rem 0;
+            color: #8a8f98;
+            font-size: 0.73rem;
             font-weight: 700;
-            line-height: 1.2;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
         }
-        .network-availability {
-            display: flex;
-            align-items: center;
-            gap: 0.42rem;
-            margin: 0.52rem 0 0.35rem 0;
-            font-size: 0.78rem;
-            color: #8a8f98;
-        }
-        .network-availability-dot {
-            width: 0.42rem;
-            height: 0.42rem;
-            border-radius: 999px;
-            flex: 0 0 auto;
-        }
-        .network-utc-note {
-            margin-top: 0.75rem;
-            font-size: 0.78rem;
-            line-height: 1.35rem;
-            color: #8a8f98;
+        .st-key-network_selector {
+            width: 100%;
+            max-width: 340px;
+            margin-bottom: 1.15rem;
         }
 
         @media (max-width: 768px) {
-            section[data-testid="stSidebar"] {
-                width: min(82vw, 300px) !important;
-                min-width: min(82vw, 300px) !important;
+            .block-container {
+                padding-top: 1.25rem;
             }
-            section[data-testid="stSidebar"] > div:first-child {
-                width: 100% !important;
+            .network-picker-label {
+                margin-top: -0.2rem;
             }
-            section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-                padding-top: 1rem;
-                padding-left: 1.15rem;
-                padding-right: 1.15rem;
-            }
-            .sidebar-network-title {
-                font-size: 1.35rem;
-                margin-bottom: 0.45rem;
-            }
-            .network-utc-note {
-                margin-top: 0.65rem;
+            .st-key-network_selector {
+                max-width: none;
+                margin-bottom: 0.9rem;
             }
         }
     </style>
@@ -226,14 +200,6 @@ def apply_network_theme(network: str) -> None:
                 color: var(--chain-accent) !important;
                 box-shadow: inset 0 -2px 0 var(--chain-accent) !important;
             }}
-            .network-availability {{
-                color: var(--chain-accent);
-            }}
-            .network-availability-dot {{
-                background: var(--chain-gradient);
-                box-shadow: 0 0 0 3px var(--chain-soft);
-            }}
-
             /* Ligne d'identité très légère sous le titre principal. */
             .lookup-subtitle {{
                 border-left: 3px solid var(--chain-accent);
@@ -683,38 +649,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.sidebar:
-    st.markdown(
-        '<div class="sidebar-network-title">Réseau</div>',
-        unsafe_allow_html=True,
-    )
+st.markdown(
+    '<div class="network-picker-label">Réseau</div>',
+    unsafe_allow_html=True,
+)
 
-    network_options = ["Solana", "Ethereum", "Bitcoin"]
-    network = st.segmented_control(
-        "Réseau blockchain",
-        network_options,
-        default="Solana",
-        format_func=lambda value: NETWORK_THEMES[value]["symbol"],
-        key="network_selector",
-        label_visibility="collapsed",
-    )
-    if network is None:
-        network = "Solana"
+network_options = ["Solana", "Ethereum", "Bitcoin"]
+network = st.segmented_control(
+    "Réseau blockchain",
+    network_options,
+    default="Solana",
+    format_func=lambda value: NETWORK_THEMES[value]["symbol"],
+    key="network_selector",
+    label_visibility="collapsed",
+)
+if network is None:
+    network = "Solana"
 
-    apply_network_theme(network)
-    network_theme = NETWORK_THEMES[network]
-    st.markdown(
-        (
-            '<div class="network-availability">'
-            '<span class="network-availability-dot"></span>'
-            f'<span>{network_theme["symbol"]} disponible</span>'
-            "</div>"
-            '<div class="network-utc-note">'
-            "Toutes les heures sont interprétées en UTC."
-            "</div>"
-        ),
-        unsafe_allow_html=True,
-    )
+apply_network_theme(network)
 
 now_utc = datetime.now(timezone.utc)
 
