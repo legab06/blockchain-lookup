@@ -286,6 +286,7 @@ def search_solana_window(
     transfers_rows: list[dict[str, Any]] = []
     movements_rows: list[dict[str, Any]] = []
     operations_rows: list[dict[str, Any]] = []
+    transfer_evidence_rows: list[dict[str, Any]] = []
 
     analyzed_blocks = 0
     skipped_blocks = 0
@@ -319,6 +320,34 @@ def search_solana_window(
                 "evidence": evidence,
                 "detail": detail,
                 "legs": legs or [],
+                "explorer": f"https://explorer.solana.com/tx/{signature}",
+                "solscan": f"https://solscan.io/tx/{signature}",
+            }
+        )
+
+    def append_transfer_evidence(
+        *,
+        block_slot: int,
+        block_time: str,
+        signature: str,
+        asset: str,
+        mint: str,
+        amount: str,
+        source: str,
+        destination: str,
+        location: str,
+    ) -> None:
+        transfer_evidence_rows.append(
+            {
+                "block": block_slot,
+                "block_time_utc": block_time,
+                "signature": signature,
+                "asset": asset,
+                "mint": mint,
+                "amount": amount,
+                "source": source,
+                "destination": destination,
+                "location": location,
                 "explorer": f"https://explorer.solana.com/tx/{signature}",
                 "solscan": f"https://solscan.io/tx/{signature}",
             }
@@ -365,6 +394,18 @@ def search_solana_window(
         )
         amount = Decimal(lamports) / LAMPORTS_PER_SOL
         amount_text = _format_decimal(amount)
+
+        append_transfer_evidence(
+            block_slot=block_slot,
+            block_time=block_time,
+            signature=signature,
+            asset="SOL",
+            mint="",
+            amount=amount_text,
+            source=source,
+            destination=destination,
+            location=location,
+        )
 
         transfers_rows.append(
             {
@@ -471,6 +512,18 @@ def search_solana_window(
         amount_text = _format_decimal(amount)
         source = str(source_meta.get("owner") or info.get("authority") or source_account)
         destination = str(destination_meta.get("owner") or destination_account)
+
+        append_transfer_evidence(
+            block_slot=block_slot,
+            block_time=block_time,
+            signature=signature,
+            asset=asset,
+            mint=mint,
+            amount=amount_text,
+            source=source,
+            destination=destination,
+            location=location,
+        )
 
         if not location.startswith("outer:"):
             return
@@ -810,17 +863,27 @@ def search_solana_window(
                     token_accounts,
                 )
 
-            # Inner instructions : conservées uniquement pour la vue technique
-            # des transferts SOL, sans créer d'opération utilisateur supplémentaire.
+            # Les inner instructions ne créent pas d'opération utilisateur
+            # distincte, mais servent de preuve technique pour retrouver un
+            # montant exact à l'intérieur d'un swap.
             for group in meta.get("innerInstructions", []) or []:
                 parent_index = group.get("index", "")
                 for inner_index, instruction in enumerate(group.get("instructions", [])):
+                    location = f"inner:{parent_index}:{inner_index}"
                     extract_sol_instruction(
                         instruction,
                         block_slot,
                         block_time,
                         signature,
-                        f"inner:{parent_index}:{inner_index}",
+                        location,
+                    )
+                    extract_token_instruction(
+                        instruction,
+                        block_slot,
+                        block_time,
+                        signature,
+                        location,
+                        token_accounts,
                     )
 
     if progress_callback:
@@ -912,9 +975,84 @@ def search_solana_window(
                         "solscan": operation["solscan"],
                     }
                 )
-                matched_signature_asset_amount.add(
-                    (operation["signature"], asset, amount_text)
+                identity_asset = (
+                    "SOL"
+                    if asset in {"SOL", "WSOL"} or mint == WSOL_MINT
+                    else (mint or asset)
                 )
+                matched_signature_asset_amount.add(
+                    (operation["signature"], identity_asset, amount_text)
+                )
+
+        # Les swaps passent souvent par des inner instructions. Le montant
+        # communiqué peut donc exister exactement dans un transfert interne,
+        # même si le delta économique net diffère légèrement (frais, rent,
+        # wrapping, routage multi-hop). On n'utilise cette preuve comme
+        # résultat de swap que si la transaction est déjà reconnue comme swap.
+        for evidence in transfer_evidence_rows:
+            try:
+                evidence_amount = Decimal(str(evidence["amount"]))
+            except InvalidOperation:
+                continue
+
+            asset = str(evidence.get("asset") or "")
+            mint = str(evidence.get("mint") or "")
+            if not target_matches(asset, mint, evidence_amount):
+                continue
+
+            amount_text = _format_decimal(abs(evidence_amount))
+            identity_asset = (
+                "SOL"
+                if asset in {"SOL", "WSOL"} or mint == WSOL_MINT
+                else (mint or asset)
+            )
+            dedupe_key = (
+                evidence["signature"],
+                identity_asset,
+                amount_text,
+            )
+            if dedupe_key in matched_signature_asset_amount:
+                continue
+
+            swap_operations = [
+                operation
+                for operation in operations_by_signature.get(
+                    evidence["signature"], []
+                )
+                if operation["operation_type"] == "swap_probable"
+            ]
+
+            if not swap_operations:
+                continue
+
+            swap = swap_operations[0]
+            matches_rows.append(
+                {
+                    "match_type": "swap_probable",
+                    "match_role": "Montant exact observé dans le swap",
+                    "block": evidence["block"],
+                    "block_time_utc": evidence["block_time_utc"],
+                    "signature": evidence["signature"],
+                    "matched_amount": amount_text,
+                    "matched_asset": (
+                        "SOL"
+                        if asset == "WSOL" or mint == WSOL_MINT
+                        else asset
+                    ),
+                    "sent": swap["sent"],
+                    "received": swap["received"],
+                    "source": evidence["source"],
+                    "destination": evidence["destination"],
+                    "account": swap["account"],
+                    "detail": (
+                        "Correspondance exacte dans une instruction interne "
+                        f"du swap ({evidence['location']})"
+                    ),
+                    "explorer": evidence["explorer"],
+                    "solscan": evidence["solscan"],
+                }
+            )
+            matched_signature_asset_amount.add(dedupe_key)
 
         for movement in movements_rows:
             try:
@@ -928,7 +1066,16 @@ def search_solana_window(
                 continue
 
             amount_text = _format_decimal(abs(movement_amount))
-            dedupe_key = (movement["signature"], asset, amount_text)
+            identity_asset = (
+                "SOL"
+                if asset in {"SOL", "WSOL"} or mint == WSOL_MINT
+                else (mint or asset)
+            )
+            dedupe_key = (
+                movement["signature"],
+                identity_asset,
+                amount_text,
+            )
             if dedupe_key in matched_signature_asset_amount:
                 continue
 
