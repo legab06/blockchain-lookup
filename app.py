@@ -53,6 +53,31 @@ st.markdown(
             margin: 0.45rem 0 0.28rem 0;
             color: rgba(49, 51, 63, 0.86);
         }
+
+        /* Navigation des vues façon onglets Streamlit :
+           texte simple + trait sous l'onglet actif. */
+        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] {
+            display: flex;
+            gap: 0.1rem;
+            border-bottom: 1px solid rgba(128, 128, 128, 0.22);
+        }
+        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] > label {
+            position: relative;
+            padding: 0.38rem 0.78rem 0.52rem 0.78rem;
+            margin: 0;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+            transition: border-color 120ms ease, color 120ms ease;
+        }
+        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] > label > div:first-child {
+            display: none !important;
+        }
+        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] > label:has(input:checked) {
+            border-bottom-color: #ff4b4b;
+        }
+        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] > label:hover {
+            color: #ff4b4b;
+        }
         @media (prefers-color-scheme: dark) {
             .compact-filter-title {
                 color: rgba(250, 250, 250, 0.86);
@@ -627,21 +652,20 @@ if result:
             )
 
     st.markdown("#### Vue des données")
-    view = st.segmented_control(
-        "Vue",
-        [
-            "🎯 Résultats",
-            "🧾 Transactions",
-            "💸 Opérations",
-            "📊 Variations de solde",
-            "ℹ️ Résumé de la recherche",
-        ],
-        default="🎯 Résultats",
-        selection_mode="single",
-        label_visibility="collapsed",
-        key="result_view",
-        width="stretch",
-    )
+    with st.container(key="result_tabs_nav"):
+        view = st.radio(
+            "Vue",
+            [
+                "🎯 Résultats",
+                "🧾 Transactions",
+                "💸 Opérations",
+                "📊 Variations de solde",
+                "ℹ️ Résumé de la recherche",
+            ],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="result_view",
+        )
 
     if view != "ℹ️ Résumé de la recherche":
         st.markdown(
