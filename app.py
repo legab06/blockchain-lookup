@@ -95,6 +95,135 @@ st.markdown(
 )
 
 
+NETWORK_THEMES = {
+    "Solana": {
+        "symbol": "SOL",
+        "accent": "#14F195",
+        "accent_hover": "#10D987",
+        "secondary": "#9945FF",
+        "soft": "rgba(20, 241, 149, 0.12)",
+        "ring": "rgba(20, 241, 149, 0.24)",
+        "gradient": "linear-gradient(90deg, #9945FF 0%, #14F195 100%)",
+    },
+    "Ethereum": {
+        "symbol": "ETH",
+        "accent": "#627EEA",
+        "accent_hover": "#526DD0",
+        "secondary": "#8A92B2",
+        "soft": "rgba(98, 126, 234, 0.12)",
+        "ring": "rgba(98, 126, 234, 0.24)",
+        "gradient": "linear-gradient(90deg, #627EEA 0%, #8A92B2 100%)",
+    },
+    "Bitcoin": {
+        "symbol": "BTC",
+        "accent": "#F7931A",
+        "accent_hover": "#DD7F0B",
+        "secondary": "#FFB347",
+        "soft": "rgba(247, 147, 26, 0.12)",
+        "ring": "rgba(247, 147, 26, 0.24)",
+        "gradient": "linear-gradient(90deg, #F7931A 0%, #FFB347 100%)",
+    },
+}
+
+
+def apply_network_theme(network: str) -> None:
+    theme = NETWORK_THEMES[network]
+    st.markdown(
+        f"""
+        <style>
+            :root {{
+                --chain-accent: {theme["accent"]};
+                --chain-accent-hover: {theme["accent_hover"]};
+                --chain-secondary: {theme["secondary"]};
+                --chain-soft: {theme["soft"]};
+                --chain-ring: {theme["ring"]};
+                --chain-gradient: {theme["gradient"]};
+            }}
+
+            /* Identité réseau : visible, mais limitée aux accents UI. */
+            .network-badge {{
+                display: inline-flex;
+                align-items: center;
+                gap: 0.48rem;
+                margin-top: 0.2rem;
+                padding: 0.3rem 0.68rem;
+                border: 1px solid var(--chain-ring);
+                border-radius: 999px;
+                background: var(--chain-soft);
+                color: var(--chain-accent);
+                font-size: 0.82rem;
+                font-weight: 650;
+                line-height: 1.2rem;
+            }}
+            .network-badge-dot {{
+                width: 0.48rem;
+                height: 0.48rem;
+                border-radius: 999px;
+                background: var(--chain-gradient);
+                box-shadow: 0 0 0 3px var(--chain-soft);
+                flex: 0 0 auto;
+            }}
+
+            /* Ligne d'identité très légère sous le titre principal. */
+            .lookup-subtitle {{
+                border-left: 3px solid var(--chain-accent);
+                padding-left: 0.72rem;
+            }}
+
+            /* Champs : focus cohérent avec la blockchain sélectionnée. */
+            [data-baseweb="input"]:focus-within,
+            [data-baseweb="select"] > div:focus-within,
+            [data-baseweb="textarea"]:focus-within {{
+                border-color: var(--chain-accent) !important;
+                box-shadow: 0 0 0 1px var(--chain-ring) !important;
+            }}
+
+            /* CTA principal de recherche. */
+            div[data-testid="stFormSubmitButton"] > button {{
+                background: var(--chain-gradient) !important;
+                border-color: var(--chain-accent) !important;
+                color: #ffffff !important;
+                font-weight: 650 !important;
+                box-shadow: none !important;
+            }}
+            div[data-testid="stFormSubmitButton"] > button:hover {{
+                border-color: var(--chain-accent-hover) !important;
+                filter: brightness(0.96);
+            }}
+            div[data-testid="stFormSubmitButton"] > button:focus {{
+                box-shadow: 0 0 0 0.2rem var(--chain-ring) !important;
+            }}
+
+            /* Les boutons utilitaires restent neutres, avec un rappel au survol. */
+            div[data-testid="stDownloadButton"] > button:hover {{
+                border-color: var(--chain-accent) !important;
+                color: var(--chain-accent) !important;
+            }}
+
+            /* Navigation des résultats : le réseau remplace l'ancien rouge fixe. */
+            .st-key-result_tabs_nav [data-testid="stButton"] > button:hover {{
+                color: var(--chain-accent) !important;
+            }}
+
+            /* Repères discrets autour des informations importantes. */
+            .utc-badge {{
+                border-color: var(--chain-ring);
+            }}
+            div[data-testid="stMetric"] {{
+                border-top: 2px solid var(--chain-accent);
+            }}
+
+            /* Radio du réseau : texte sélectionné aux couleurs de la chaîne. */
+            div[role="radiogroup"] label:has(input:checked) {{
+                color: var(--chain-accent) !important;
+                font-weight: 650;
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def to_csv_bytes(rows: list[dict]) -> bytes:
     return (
         pd.DataFrame(rows)
@@ -497,12 +626,17 @@ with st.sidebar:
         index=0,
     )
 
-    if network == "Solana":
-        st.success("SOL · disponible")
-    elif network == "Ethereum":
-        st.success("ETH · disponible")
-    else:
-        st.success("BTC · disponible")
+    apply_network_theme(network)
+    network_theme = NETWORK_THEMES[network]
+    st.markdown(
+        (
+            '<div class="network-badge">'
+            '<span class="network-badge-dot"></span>'
+            f'{network_theme["symbol"]} · disponible'
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
     st.divider()
     st.caption(
@@ -815,7 +949,7 @@ if result and result.get("network") == network:
         <style>
             .st-key-result_tab_item_{active_view_index}
             [data-testid="stButton"] > button {{
-                border-bottom-color: #ff4b4b !important;
+                border-bottom-color: var(--chain-accent) !important;
             }}
         </style>
         """,
