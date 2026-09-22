@@ -54,36 +54,25 @@ st.markdown(
             color: rgba(49, 51, 63, 0.86);
         }
 
-        /* Navigation des vues : texte seul, sans pastille ni ligne globale.
+        /* Navigation des vues : vrais boutons texte, sans pastille radio.
            Seul l'onglet actif reçoit un soulignement rouge. */
-        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] {
-            display: flex;
-            gap: 0.15rem;
-            border: 0 !important;
+        .st-key-result_tabs_nav [data-testid="stHorizontalBlock"] {
+            gap: 0.15rem !important;
         }
-        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] label,
-        .st-key-result_tabs_nav [data-baseweb="radio"] {
-            position: relative;
-            padding: 0.38rem 0.78rem 0.48rem 0.78rem !important;
-            margin: 0 !important;
+        .st-key-result_tabs_nav [data-testid="stButton"] > button {
             border: 0 !important;
+            border-radius: 0 !important;
             border-bottom: 2px solid transparent !important;
             background: transparent !important;
-            cursor: pointer;
+            box-shadow: none !important;
+            padding: 0.38rem 0.78rem 0.48rem 0.78rem !important;
+            min-height: auto !important;
         }
-        .st-key-result_tabs_nav [data-testid="stRadio"] input[type="radio"] {
-            position: absolute !important;
-            opacity: 0 !important;
-            width: 0 !important;
-            height: 0 !important;
-            pointer-events: none !important;
+        .st-key-result_tabs_nav [data-testid="stButton"] > button:hover {
+            background: transparent !important;
         }
-        .st-key-result_tabs_nav [data-baseweb="radio"] > div:first-child,
-        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
-            display: none !important;
-        }
-        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked),
-        .st-key-result_tabs_nav [data-baseweb="radio"]:has(input:checked) {
+        .st-key-result_tabs_nav [data-testid="stButton"] > button[kind="primary"],
+        .st-key-result_tabs_nav [data-testid="stBaseButton-primary"] {
             border-bottom-color: #ff4b4b !important;
         }
         @media (prefers-color-scheme: dark) {
@@ -660,20 +649,36 @@ if result:
             )
 
     st.markdown("#### Vue des données")
+    view_options = [
+        "🎯 Résultats",
+        "🧾 Transactions",
+        "💸 Opérations",
+        "📊 Variations de solde",
+        "ℹ️ Résumé de la recherche",
+    ]
+    if st.session_state.get("result_view") not in view_options:
+        st.session_state["result_view"] = view_options[0]
+
+    def select_result_view(selected_view: str) -> None:
+        st.session_state["result_view"] = selected_view
+
     with st.container(key="result_tabs_nav"):
-        view = st.radio(
-            "Vue",
-            [
-                "🎯 Résultats",
-                "🧾 Transactions",
-                "💸 Opérations",
-                "📊 Variations de solde",
-                "ℹ️ Résumé de la recherche",
-            ],
-            horizontal=True,
-            label_visibility="collapsed",
-            key="result_view",
-        )
+        tab_columns = st.columns([1.0, 1.15, 1.05, 1.55, 1.65])
+        for tab_column, option in zip(tab_columns, view_options):
+            with tab_column:
+                st.button(
+                    option,
+                    key=f"result_tab_{view_options.index(option)}",
+                    type=(
+                        "primary"
+                        if st.session_state["result_view"] == option
+                        else "secondary"
+                    ),
+                    on_click=select_result_view,
+                    args=(option,),
+                )
+
+    view = st.session_state["result_view"]
 
     if view != "ℹ️ Résumé de la recherche":
         st.markdown(
