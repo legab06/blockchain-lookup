@@ -1081,6 +1081,19 @@ def search_ethereum_window(
 
                 display_asset = "ETH" if asset == "WETH" and target_asset == "ETH" else asset
                 amount_text = _format_decimal(abs(leg_amount))
+                identity_asset = (
+                    "ETH"
+                    if asset in {"ETH", "WETH"}
+                    else (token_address or asset)
+                )
+                dedupe_key = (
+                    operation["signature"],
+                    identity_asset,
+                    amount_text,
+                )
+                if dedupe_key in matched_signature_asset_amount:
+                    continue
+
                 matches_rows.append(
                     {
                         "match_type": operation["operation_type"],
@@ -1102,10 +1115,7 @@ def search_ethereum_window(
                     }
                 )
 
-                identity_asset = "ETH" if asset in {"ETH", "WETH"} else (token_address or asset)
-                matched_signature_asset_amount.add(
-                    (operation["signature"], identity_asset, amount_text)
-                )
+                matched_signature_asset_amount.add(dedupe_key)
 
         for evidence in raw_amount_evidence_rows:
             amount_text = _format_decimal(target_amount)
