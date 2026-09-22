@@ -544,6 +544,7 @@ with st.form("lookup_form", border=True):
         amount = st.text_input(
             "Montant communiqué — facultatif",
             placeholder="Ex. 2,5",
+            key="lookup_amount",
             help=(
                 "Montant communiqué par le prestataire. "
                 "Il sera recherché dans les transferts, swaps probables "
@@ -571,6 +572,15 @@ with st.form("lookup_form", border=True):
     )
 
 if submitted:
+    # Un nouveau lancement invalide immédiatement l'ancien résultat. Cela évite
+    # qu'une recherche précédente reste affichée si la nouvelle échoue ou si
+    # un widget de formulaire n'a pas encore été synchronisé côté serveur.
+    st.session_state.pop("lookup_result", None)
+
+    submitted_amount = str(st.session_state.get("lookup_amount", "")).strip()
+    submitted_asset = str(asset)
+    submitted_network = str(network)
+
     if network == "Bitcoin":
         st.warning(
             "Le moteur Bitcoin n'est pas encore branché. "
@@ -608,8 +618,8 @@ if submitted:
                         search_date=search_date,
                         search_time=search_time,
                         tolerance_seconds=int(tolerance),
-                        amount_sol=amount,
-                        asset_symbol=asset,
+                        amount_sol=submitted_amount,
+                        asset_symbol=submitted_asset,
                         progress_callback=on_progress,
                         status_callback=on_status,
                     )
@@ -618,8 +628,8 @@ if submitted:
                         search_date=search_date,
                         search_time=search_time,
                         tolerance_seconds=int(tolerance),
-                        amount_eth=amount,
-                        asset_symbol=asset,
+                        amount_eth=submitted_amount,
+                        asset_symbol=submitted_asset,
                         progress_callback=on_progress,
                         status_callback=on_status,
                     )
@@ -645,6 +655,15 @@ if submitted:
                 )
                 st.exception(exc)
             else:
+                if submitted_amount and result.get("target_amount") is None:
+                    raise RuntimeError(
+                        "Le montant saisi n'a pas été transmis au moteur de recherche."
+                    )
+
+                result["submitted_amount_raw"] = submitted_amount
+                result["submitted_asset"] = submitted_asset
+                result["submitted_network"] = submitted_network
+
                 progress_bar.progress(1.0, text="Recherche terminée")
                 status_box.update(
                     label="Recherche terminée",
@@ -676,7 +695,7 @@ if result and result.get("network") == network:
 
     if result["target_amount"] is not None:
         target_label = f"{result['target_amount']} {result['target_asset']}"
-        st.caption(f"Critère recherché : **{target_label}**")
+        st.caption(f"Critère réellement utilisé : **{target_label}**")
 
         if result["matches"]:
             st.success(
@@ -689,6 +708,8 @@ if result and result.get("network") == network:
                 "Consultez Transactions et Opérations pour examiner "
                 "toute la période."
             )
+    else:
+        st.caption("Critère réellement utilisé : **aucun montant**")
 
     st.markdown("#### Vue des données")
     movement_view = (
