@@ -1096,8 +1096,9 @@ def search_solana_window(
         transaction_row["operation_count"] = len(tx_operations)
         transaction_row["operation_summary"] = " | ".join(summaries)
 
-    # Correspondances exactes : on cherche le montant sur toutes les jambes
-    # d'une opération, puis on conserve les variations de solde comme filet de sécurité.
+    # Correspondances exactes ou approchées : on cherche le montant sur toutes
+    # les jambes d'une opération, puis on conserve les variations de solde
+    # comme filet de sécurité.
     matches_rows: list[dict[str, Any]] = []
     matched_signature_asset_amount: set[tuple[str, str, str]] = set()
 
@@ -1219,8 +1220,13 @@ def search_solana_window(
                     "destination": evidence["destination"],
                     "account": swap["account"],
                     "detail": (
-                        "Correspondance exacte dans une instruction interne "
-                        f"du swap ({evidence['location']})"
+                        (
+                            "Correspondance exacte"
+                            if match_quality == "exact"
+                            else "Correspondance approchée"
+                        )
+                        + " dans une instruction interne du swap "
+                        + f"({evidence['location']})"
                     ),
                     "explorer": evidence["explorer"],
                     "solscan": evidence["solscan"],
