@@ -46,6 +46,18 @@ st.markdown(
         .table-footer-right {
             text-align: right;
         }
+        .compact-filter-title {
+            font-size: 0.82rem;
+            font-weight: 600;
+            line-height: 1.1rem;
+            margin: 0.45rem 0 0.28rem 0;
+            color: rgba(49, 51, 63, 0.86);
+        }
+        @media (prefers-color-scheme: dark) {
+            .compact-filter-title {
+                color: rgba(250, 250, 250, 0.86);
+            }
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -630,25 +642,29 @@ if result:
     )
 
     if view != "ℹ️ Résumé de la recherche":
-        st.markdown("#### Filtrer les données")
+        st.markdown(
+            '<div class="compact-filter-title">Filtrer les données</div>',
+            unsafe_allow_html=True,
+        )
 
-        filter_col, status_col = st.columns([4.5, 1.2])
+        filter_col, status_col = st.columns(
+            [5.2, 1.15],
+            vertical_alignment="center",
+        )
+
         with filter_col:
             global_query = st.text_input(
                 "Recherche",
-                placeholder="Hash, adresse, montant, actif, bloc, heure…",
+                placeholder="Rechercher : hash, adresse, montant, actif, bloc, heure…",
                 key="global_result_search",
                 help=(
                     "Le même filtre est conservé lorsque vous changez de vue."
                 ),
+                label_visibility="collapsed",
             )
 
         with status_col:
             if view == "🧾 Transactions":
-                st.markdown(
-                    "<div style='height: 1.72rem;'></div>",
-                    unsafe_allow_html=True,
-                )
                 only_success = st.checkbox(
                     "Réussies uniquement",
                     value=False,
