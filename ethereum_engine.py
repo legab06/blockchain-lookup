@@ -10,6 +10,8 @@ from datetime import date, datetime, time as dt_time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
+from amount_matching import AmountCriterion, parse_amount_criterion
+
 DEFAULT_RPC_URL = "https://ethereum-rpc.publicnode.com"
 DEFAULT_RPC_DELAY = 0.03
 WEI_PER_ETH = Decimal("1000000000000000000")
@@ -163,28 +165,50 @@ def _target_token_address(asset: str) -> str:
     return str(data["address"]).lower()
 
 
-def _target_matches(
+def _target_match_quality(
     *,
     target_asset: str,
-    target_amount: Decimal | None,
+    target_criterion: AmountCriterion | None,
     target_token: str,
     asset: str,
     token_address: str,
     amount: Decimal,
-) -> bool:
-    if target_amount is None or abs(amount) != target_amount:
-        return False
+) -> str | None:
+    if target_criterion is None:
+        return None
 
     normalized_asset = str(asset or "").upper()
     normalized_token = str(token_address or "").lower()
 
     if target_asset == "ETH":
-        return normalized_asset in {"ETH", "WETH"}
+        if normalized_asset not in {"ETH", "WETH"}:
+            return None
+    elif target_token:
+        if normalized_token != target_token:
+            return None
+    elif normalized_asset != target_asset:
+        return None
 
-    if target_token:
-        return normalized_token == target_token
+    return target_criterion.classify(amount)
 
-    return normalized_asset == target_asset
+
+def _target_matches(
+    *,
+    target_asset: str,
+    target_criterion: AmountCriterion | None,
+    target_token: str,
+    asset: str,
+    token_address: str,
+    amount: Decimal,
+) -> bool:
+    return _target_match_quality(
+        target_asset=target_asset,
+        target_criterion=target_criterion,
+        target_token=target_token,
+        asset=asset,
+        token_address=token_address,
+        amount=amount,
+    ) is not None
 
 
 def _input_contains_raw_amount(input_data: Any, raw_amount: int | None) -> bool:
@@ -240,7 +264,20 @@ def search_ethereum_window(
     if target_asset not in {"ETH", "USDC", "USDT"}:
         raise ValueError("Actif Ethereum non pris en charge.")
 
-    target_amount = _parse_amount(amount_eth, target_asset)
+    target_max_decimals = (
+        18
+        if target_asset == "ETH"
+        else int(KNOWN_ERC20[target_asset]["decimals"])
+    )
+    target_criterion: AmountCriterion | None = parse_amount_criterion(
+        amount_eth,
+        max_decimals=target_max_decimals,
+    )
+    target_amount = (
+        target_criterion.amount
+        if target_criterion is not None
+        else None
+    )
     target_token = _target_token_address(target_asset)
     target_raw_units = _target_raw_units(target_asset, target_amount)
 
@@ -595,7 +632,7 @@ def search_ethereum_window(
                     "OUI"
                     if _target_matches(
                         target_asset=target_asset,
-                        target_amount=target_amount,
+                        target_criterion=target_criterion,
                         target_token=target_token,
                         asset=asset,
                         token_address=token_address,
@@ -701,15 +738,21 @@ def search_ethereum_window(
             if success and value_wei > 0:
                 amount_text = _format_decimal(value_eth)
 
-                if (
-                    target_asset == "ETH"
-                    and target_raw_units is not None
-                    and value_wei == target_raw_units
-                ):
+                native_match_quality = (
+                    target_criterion.classify(value_eth)
+                    if target_asset == "ETH" and target_criterion is not None
+                    else None
+                )
+                if native_match_quality is not None:
                     direct_native_match_rows.append(
                         {
                             "match_type": "transfer",
-                            "match_role": "Valeur native exacte",
+                            "match_role": (
+                                "Valeur native exacte"
+                                if native_match_quality == "exact"
+                                else "Valeur native approchée"
+                            ),
+                            "match_quality": native_match_quality,
                             "block": block_number,
                             "block_time_utc": block_time,
                             "signature": tx_hash,
@@ -721,8 +764,13 @@ def search_ethereum_window(
                             "destination": destination,
                             "account": "",
                             "detail": (
-                                "Correspondance exacte sur le champ value "
-                                f"({value_wei} wei)"
+                                (
+                                    "Correspondance exacte"
+                                    if native_match_quality == "exact"
+                                    else "Correspondance approchée"
+                                )
+                                + " sur le champ value "
+                                + f"({value_wei} wei)"
                             ),
                             "explorer": explorer,
                             "secondary_explorer": secondary,
@@ -1013,14 +1061,15 @@ def search_ethereum_window(
 
                 asset = str(leg.get("asset") or "")
                 token_address = str(leg.get("token_address") or "").lower()
-                if not _target_matches(
+                match_quality = _target_match_quality(
                     target_asset=target_asset,
-                    target_amount=target_amount,
+                    target_criterion=target_criterion,
                     target_token=target_token,
                     asset=asset,
                     token_address=token_address,
                     amount=leg_amount,
-                ):
+                )
+                if match_quality is None:
                     continue
 
                 direction = str(leg.get("direction") or "")
@@ -1036,6 +1085,7 @@ def search_ethereum_window(
                     {
                         "match_type": operation["operation_type"],
                         "match_role": role,
+                        "match_quality": match_quality,
                         "block": operation["block"],
                         "block_time_utc": operation["block_time_utc"],
                         "signature": operation["signature"],
@@ -1087,6 +1137,7 @@ def search_ethereum_window(
                 {
                     "match_type": "swap_probable",
                     "match_role": "Montant exact encodé dans le swap",
+                    "match_quality": "exact",
                     "block": evidence["block"],
                     "block_time_utc": evidence["block_time_utc"],
                     "signature": evidence["signature"],
@@ -1112,14 +1163,15 @@ def search_ethereum_window(
 
             asset = str(movement.get("asset") or "")
             token_address = str(movement.get("token_address") or "").lower()
-            if not _target_matches(
+            match_quality = _target_match_quality(
                 target_asset=target_asset,
-                target_amount=target_amount,
+                target_criterion=target_criterion,
                 target_token=target_token,
                 asset=asset,
                 token_address=token_address,
                 amount=movement_amount,
-            ):
+            )
+            if match_quality is None:
                 continue
 
             amount_text = _format_decimal(movement_amount)
@@ -1135,7 +1187,12 @@ def search_ethereum_window(
             matches_rows.append(
                 {
                     "match_type": "balance_delta",
-                    "match_role": "Mouvement observé",
+                    "match_role": (
+                        "Mouvement exact"
+                        if match_quality == "exact"
+                        else "Mouvement approché"
+                    ),
+                    "match_quality": match_quality,
                     "block": movement["block"],
                     "block_time_utc": movement["block_time_utc"],
                     "signature": movement["signature"],
@@ -1181,6 +1238,16 @@ def search_ethereum_window(
         "tolerance_seconds": tolerance_seconds,
         "target_amount": target_amount,
         "target_asset": target_asset,
+        "target_amount_precision": (
+            target_criterion.decimal_places
+            if target_criterion is not None
+            else None
+        ),
+        "target_amount_tolerance": (
+            target_criterion.tolerance
+            if target_criterion is not None
+            else None
+        ),
         "target_token": target_token,
         "start_block": start_block,
         "end_block": end_block,
