@@ -673,7 +673,8 @@ if result:
     st.markdown(
         f"""
         <style>
-            .st-key-result_tab_{active_view_index} button {{
+            .st-key-result_tab_item_{active_view_index}
+            [data-testid="stButton"] > button {{
                 border-bottom-color: #ff4b4b !important;
             }}
         </style>
@@ -690,14 +691,18 @@ if result:
         gap="xsmall",
     ):
         for index, option in enumerate(view_options):
-            st.button(
-                option,
-                key=f"result_tab_{index}",
-                type="secondary",
+            with st.container(
+                key=f"result_tab_item_{index}",
                 width="content",
-                on_click=select_result_view,
-                args=(option,),
-            )
+            ):
+                st.button(
+                    option,
+                    key=f"result_tab_button_{index}",
+                    type="secondary",
+                    width="content",
+                    on_click=select_result_view,
+                    args=(option,),
+                )
 
     view = st.session_state["result_view"]
 
