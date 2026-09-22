@@ -627,7 +627,7 @@ if result:
             )
 
     st.markdown("#### Vue des données")
-    view = st.radio(
+    view = st.segmented_control(
         "Vue",
         [
             "🎯 Résultats",
@@ -636,9 +636,11 @@ if result:
             "📊 Variations de solde",
             "ℹ️ Résumé de la recherche",
         ],
-        horizontal=True,
+        default="🎯 Résultats",
+        selection_mode="single",
         label_visibility="collapsed",
         key="result_view",
+        width="stretch",
     )
 
     if view != "ℹ️ Résumé de la recherche":
