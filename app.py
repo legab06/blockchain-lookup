@@ -559,7 +559,9 @@ with st.form("lookup_form", border=True):
             help=(
                 "Montant communiqué par le prestataire. "
                 "Il sera recherché dans les transferts, swaps probables "
-                "et variations de solde de l'actif choisi."
+                "et variations de solde de l'actif choisi. "
+                "Une correspondance approchée est aussi admise selon le "
+                "nombre de décimales saisi, avec un écart maximal plafonné."
             ),
         )
 
@@ -711,9 +713,10 @@ if result and result.get("network") == network:
 
         st.caption(f"Critère réellement utilisé : **{target_label}**")
         if amount_tolerance is not None and precision is not None:
+            tolerance_label = format(amount_tolerance, "f")
             st.caption(
                 "Correspondance approchée : écart strictement inférieur à "
-                f"**{amount_tolerance} {result['target_asset']}** "
+                f"**{tolerance_label} {result['target_asset']}** "
                 f"(précision saisie : {precision} décimale(s))."
             )
 
