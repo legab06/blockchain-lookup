@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timezone
+
 import pandas as pd
 import streamlit as st
 
@@ -43,7 +44,11 @@ st.markdown(
 
 
 def to_csv_bytes(rows: list[dict]) -> bytes:
-    return pd.DataFrame(rows).to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
+    return (
+        pd.DataFrame(rows)
+        .to_csv(index=False, sep=";", encoding="utf-8-sig")
+        .encode("utf-8-sig")
+    )
 
 
 DISPLAY_COLUMN_LABELS = {
@@ -51,25 +56,30 @@ DISPLAY_COLUMN_LABELS = {
     "block_time_utc": "Date / heure UTC",
     "transaction_index": "N° dans le bloc",
     "signature": "Transaction",
-    "source": "Expéditeur",
-    "destination": "Destinataire",
-    "sol": "Montant (SOL)",
-    "amount_sol": "Montant (SOL)",
+    "status": "Statut",
     "fee_sol": "Frais (SOL)",
-    "delta_sol": "Variation (SOL)",
-    "absolute_delta_sol": "Variation absolue (SOL)",
     "account_count": "Nb. de comptes",
     "accounts": "Comptes concernés",
-    "transfer_count": "Nb. de transferts",
-    "transfer_amounts_sol": "Montant(s) transféré(s)",
-    "transfer_parties": "Expéditeur → destinataire",
+    "operation_count": "Nb. d'opérations",
+    "operation_summary": "Opération(s) détectée(s)",
+    "operation_type": "Type",
+    "sent": "Envoyé",
+    "received": "Reçu",
+    "source": "Expéditeur",
+    "destination": "Destinataire",
     "account": "Compte concerné",
-    "match_target": "Montant recherché ?",
-    "match_type": "Type de résultat",
-    "instruction_type": "Type d’opération",
+    "evidence": "Détection",
     "detail": "Détail",
+    "match_role": "Correspondance",
+    "matched_amount": "Montant",
+    "matched_asset": "Actif",
+    "asset": "Actif",
+    "balance_before": "Solde avant",
+    "balance_after": "Solde après",
+    "delta_amount": "Variation",
+    "absolute_delta_amount": "Variation absolue",
+    "match_target": "Montant recherché ?",
     "error": "Erreur",
-    "status": "Statut",
     "explorer": "Explorateur",
     "solscan": "Solscan",
 }
@@ -77,12 +87,16 @@ DISPLAY_COLUMN_LABELS = {
 TABLE_COLUMNS = {
     "matches": [
         "block_time_utc",
-        "amount_sol",
+        "matched_amount",
+        "matched_asset",
+        "match_role",
+        "operation_type",
+        "sent",
+        "received",
         "source",
         "destination",
         "account",
         "signature",
-        "match_type",
         "detail",
         "solscan",
         "explorer",
@@ -90,11 +104,10 @@ TABLE_COLUMNS = {
     ],
     "transactions": [
         "block_time_utc",
-        "transfer_amounts_sol",
-        "transfer_count",
+        "operation_summary",
+        "operation_count",
         "status",
         "signature",
-        "transfer_parties",
         "fee_sol",
         "account_count",
         "accounts",
@@ -104,22 +117,26 @@ TABLE_COLUMNS = {
         "transaction_index",
         "error",
     ],
-    "transfers": [
+    "operations": [
         "block_time_utc",
-        "sol",
+        "operation_type",
+        "sent",
+        "received",
         "source",
         "destination",
+        "account",
+        "evidence",
         "signature",
-        "match_target",
-        "instruction_type",
+        "detail",
         "solscan",
         "explorer",
         "block",
     ],
     "movements": [
         "block_time_utc",
-        "absolute_delta_sol",
-        "delta_sol",
+        "asset",
+        "absolute_delta_amount",
+        "delta_amount",
         "account",
         "signature",
         "match_target",
@@ -129,6 +146,31 @@ TABLE_COLUMNS = {
     ],
 }
 
+OPERATION_TYPE_LABELS = {
+    "transfer": "Transfert SOL",
+    "token_transfer": "Transfert de token",
+    "swap_probable": "Swap probable",
+    "balance_delta": "Variation de solde",
+}
+
+
+def localize_rows(rows: list[dict]) -> list[dict]:
+    localized: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        if "operation_type" in item:
+            item["operation_type"] = OPERATION_TYPE_LABELS.get(
+                item["operation_type"],
+                item["operation_type"],
+            )
+        if "match_type" in item:
+            item["operation_type"] = OPERATION_TYPE_LABELS.get(
+                item["match_type"],
+                item["match_type"],
+            )
+        localized.append(item)
+    return localized
+
 
 def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None:
     if not rows:
@@ -136,13 +178,25 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
         return
 
     columns = TABLE_COLUMNS[table_kind]
-    table = pd.DataFrame(rows).reindex(columns=columns).rename(columns=DISPLAY_COLUMN_LABELS)
+    table = (
+        pd.DataFrame(localize_rows(rows))
+        .reindex(columns=columns)
+        .rename(columns=DISPLAY_COLUMN_LABELS)
+    )
+
     if "Statut" in table:
         table["Statut"] = table["Statut"].replace(
             {"SUCCESS": "Réussie", "FAILED": "Échouée"}
         )
 
-    for column in ("Montant(s) transféré(s)", "Expéditeur → destinataire"):
+    for column in (
+        "Opération(s) détectée(s)",
+        "Envoyé",
+        "Reçu",
+        "Expéditeur",
+        "Destinataire",
+        "Compte concerné",
+    ):
         if column in table:
             table[column] = table[column].replace("", "—").fillna("—")
 
@@ -151,8 +205,14 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Explorateur": st.column_config.LinkColumn("Explorateur", display_text="Ouvrir"),
-            "Solscan": st.column_config.LinkColumn("Solscan", display_text="Ouvrir"),
+            "Explorateur": st.column_config.LinkColumn(
+                "Explorateur",
+                display_text="Ouvrir",
+            ),
+            "Solscan": st.column_config.LinkColumn(
+                "Solscan",
+                display_text="Ouvrir",
+            ),
         },
     )
 
@@ -163,7 +223,6 @@ def filter_rows(
     *,
     only_success: bool = False,
 ) -> list[dict]:
-    """Filtre libre sur toutes les valeurs d'une ligne."""
     query = query.strip().casefold()
     filtered: list[dict] = []
 
@@ -183,7 +242,10 @@ def filter_rows(
 
 st.title("🔎 Blockchain Lookup")
 st.markdown(
-    '<div class="lookup-subtitle">Retrouver une opération blockchain à partir d’une date, d’une heure approximative et, si disponible, d’un montant.</div>',
+    '<div class="lookup-subtitle">'
+    "Retrouver une opération blockchain à partir d’une date, "
+    "d’une heure approximative et, si disponible, d’un montant."
+    "</div>",
     unsafe_allow_html=True,
 )
 
@@ -201,12 +263,12 @@ with st.sidebar:
         st.info(f"{network} · module à ajouter")
 
     st.divider()
-    st.caption("Toutes les dates et heures de recherche sont interprétées en UTC.")
+    st.caption(
+        "Toutes les dates et heures de recherche sont interprétées en UTC."
+    )
 
 now_utc = datetime.now(timezone.utc)
 
-# Initialise une seule fois les valeurs par défaut des widgets.
-# Ensuite Streamlit conserve les saisies de l'utilisateur entre les reruns.
 if "lookup_date" not in st.session_state:
     st.session_state["lookup_date"] = now_utc.date()
 
@@ -219,7 +281,10 @@ if "lookup_time" not in st.session_state:
 
 with st.form("lookup_form", border=True):
     st.subheader("Critères de recherche")
-    st.caption("Saisissez les éléments communiqués par le prestataire. Le montant est facultatif.")
+    st.caption(
+        "Saisissez uniquement les éléments communiqués par le prestataire. "
+        "Le montant reste facultatif."
+    )
 
     col_date, col_time, col_tolerance = st.columns([1.15, 1.15, 1])
 
@@ -246,11 +311,26 @@ with st.form("lookup_form", border=True):
             step=5,
         )
 
-    amount = st.text_input(
-        "Montant (SOL) — facultatif",
-        placeholder="Ex. 1,25",
-        help="Laissez vide si le montant est inconnu ou incertain. Virgule ou point acceptés.",
-    )
+    amount_col, asset_col = st.columns([3, 1])
+
+    with amount_col:
+        amount = st.text_input(
+            "Montant communiqué — facultatif",
+            placeholder="Ex. 2,5",
+            help=(
+                "Montant communiqué par le prestataire. "
+                "Il sera recherché dans les transferts, swaps probables "
+                "et variations de solde de l'actif choisi."
+            ),
+        )
+
+    with asset_col:
+        asset = st.selectbox(
+            "Actif",
+            ["SOL", "USDC", "USDT"],
+            index=0,
+            help="Actif auquel correspond le montant communiqué.",
+        )
 
     submitted = st.form_submit_button(
         "Rechercher",
@@ -260,11 +340,18 @@ with st.form("lookup_form", border=True):
 
 if submitted:
     if network != "Solana":
-        st.warning(f"Le moteur {network} n'est pas encore branché. Pour l'instant, sélectionne Solana.")
+        st.warning(
+            f"Le moteur {network} n'est pas encore branché. "
+            "Pour l'instant, sélectionnez Solana."
+        )
     else:
         progress_bar = st.progress(0, text="Initialisation…")
 
-        with st.status("Recherche Solana en cours…", expanded=True) as status_box:
+        with st.status(
+            "Recherche Solana en cours…",
+            expanded=True,
+        ) as status_box:
+
             def on_status(message: str) -> None:
                 status_box.write(message)
 
@@ -272,10 +359,14 @@ if submitted:
                 if total <= 0:
                     progress_bar.progress(0, text="Aucun bloc candidat")
                     return
+
                 ratio = min(max(current / total, 0.0), 1.0)
                 progress_bar.progress(
                     ratio,
-                    text=f"Analyse des blocs : {current}/{total} · slot {slot}",
+                    text=(
+                        f"Analyse des blocs : {current}/{total} "
+                        f"· slot {slot}"
+                    ),
                 )
 
             try:
@@ -284,21 +375,38 @@ if submitted:
                     search_time=search_time,
                     tolerance_seconds=int(tolerance),
                     amount_sol=amount,
+                    asset_symbol=asset,
                     progress_callback=on_progress,
                     status_callback=on_status,
                 )
             except ValueError as exc:
-                status_box.update(label="Paramètres invalides", state="error", expanded=True)
+                status_box.update(
+                    label="Paramètres invalides",
+                    state="error",
+                    expanded=True,
+                )
                 st.error(str(exc))
             except SolanaSearchError as exc:
-                status_box.update(label="Erreur pendant la recherche", state="error", expanded=True)
+                status_box.update(
+                    label="Erreur pendant la recherche",
+                    state="error",
+                    expanded=True,
+                )
                 st.error(str(exc))
             except Exception as exc:
-                status_box.update(label="Erreur inattendue", state="error", expanded=True)
+                status_box.update(
+                    label="Erreur inattendue",
+                    state="error",
+                    expanded=True,
+                )
                 st.exception(exc)
             else:
                 progress_bar.progress(1.0, text="Recherche terminée")
-                status_box.update(label="Recherche terminée", state="complete", expanded=False)
+                status_box.update(
+                    label="Recherche terminée",
+                    state="complete",
+                    expanded=False,
+                )
                 st.session_state["solana_result"] = result
 
 result = st.session_state.get("solana_result")
@@ -311,23 +419,32 @@ if result:
         f"{result['start_dt'].strftime('%d/%m/%Y %H:%M:%S')} → "
         f"{result['end_dt'].strftime('%d/%m/%Y %H:%M:%S')} UTC"
     )
-    st.markdown(f'<span class="utc-badge">{window_label}</span>', unsafe_allow_html=True)
+    st.markdown(
+        f'<span class="utc-badge">{window_label}</span>',
+        unsafe_allow_html=True,
+    )
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Blocs analysés", result["analyzed_blocks"])
     m2.metric("Transactions", len(result["transactions"]))
-    m3.metric("Transferts", len(result["transfers"]))
+    m3.metric("Opérations détectées", len(result["operations"]))
     m4.metric("Résultats exacts", len(result["matches"]))
 
-    if result["target_sol"] is not None:
+    if result["target_amount"] is not None:
+        target_label = (
+            f"{result['target_amount']} {result['target_asset']}"
+        )
+
         if result["matches"]:
             st.success(
-                f"{len(result['matches'])} résultat(s) exact(s) pour {result['target_sol']} SOL."
+                f"{len(result['matches'])} correspondance(s) exacte(s) "
+                f"pour {target_label}."
             )
         else:
             st.warning(
-                f"Aucune correspondance exacte pour {result['target_sol']} SOL. "
-                "Consultez l’onglet Transactions pour examiner toutes les opérations de la période."
+                f"Aucune correspondance exacte pour {target_label}. "
+                "Consultez Transactions et Opérations pour examiner "
+                "toute la période."
             )
 
     st.markdown("#### Filtrer les données")
@@ -336,9 +453,12 @@ if result:
     with search_col:
         global_query = st.text_input(
             "Recherche",
-            placeholder="Hash, adresse, montant, bloc, heure…",
+            placeholder="Hash, adresse, montant, actif, bloc, heure…",
             key="global_result_search",
-            help="Cette recherche s'applique aux onglets Résultats, Transactions, Transferts et Variations de solde.",
+            help=(
+                "Cette recherche s'applique aux onglets Résultats, "
+                "Transactions, Opérations et Variations de solde."
+            ),
         )
 
     with status_col:
@@ -359,38 +479,43 @@ if result:
         global_query,
         only_success=only_success,
     )
-    filtered_transfers = filter_rows(result["transfers"], global_query)
+    filtered_operations = filter_rows(result["operations"], global_query)
     filtered_movements = filter_rows(result["movements"], global_query)
 
-    tab_matches, tab_tx, tab_transfers, tab_movements, tab_details = st.tabs(
+    (
+        tab_matches,
+        tab_tx,
+        tab_operations,
+        tab_movements,
+        tab_details,
+    ) = st.tabs(
         [
             "🎯 Résultats",
             "🧾 Transactions",
-            "↔️ Transferts",
+            "💸 Opérations",
             "📊 Variations de solde",
             "ℹ️ Résumé de la recherche",
         ]
     )
 
     with tab_matches:
-        st.caption("Correspondances exactes avec le montant renseigné.")
-        if result["target_sol"] is None:
-            st.info("Aucun montant n'a été renseigné. Consultez Transactions pour parcourir toute la période.")
-        else:
-            match_rows = []
-            for row in filtered_matches:
-                item = dict(row)
-                item["match_type"] = {
-                    "instruction": "Transfert",
-                    "balance_delta": "Variation de solde",
-                }.get(item.get("match_type"), item.get("match_type", ""))
-                match_rows.append(item)
+        st.caption(
+            "Correspondances exactes avec le montant et l'actif renseignés."
+        )
 
+        if result["target_amount"] is None:
+            st.info(
+                "Aucun montant n'a été renseigné. "
+                "Consultez Transactions ou Opérations pour parcourir "
+                "toute la période."
+            )
+        else:
             show_table(
-                match_rows,
+                filtered_matches,
                 table_kind="matches",
                 empty_message="Aucun résultat exact trouvé.",
             )
+
             if filtered_matches:
                 st.download_button(
                     "Télécharger les résultats affichés CSV",
@@ -401,11 +526,14 @@ if result:
 
     with tab_tx:
         st.caption(
-            "Toutes les transactions trouvées dans la fenêtre, même si le montant ne correspond pas exactement. "
-            "« — » signifie qu'aucun transfert SOL direct n'a été détecté dans la transaction."
+            "Toutes les transactions de la fenêtre, même lorsqu'aucune "
+            "opération simple ou aucun montant précis n'a pu être identifié. "
+            "« — » signifie qu'aucune opération utilisateur claire n'a été "
+            "détectée automatiquement."
         )
         st.caption(
-            f"{len(filtered_transactions)} transaction(s) affichée(s) sur {len(result['transactions'])}."
+            f"{len(filtered_transactions)} transaction(s) affichée(s) "
+            f"sur {len(result['transactions'])}."
         )
 
         show_table(
@@ -413,6 +541,7 @@ if result:
             table_kind="transactions",
             empty_message="Aucune transaction ne correspond à la recherche.",
         )
+
         if filtered_transactions:
             st.download_button(
                 "Télécharger les transactions affichées CSV",
@@ -421,37 +550,51 @@ if result:
                 mime="text/csv",
             )
 
-    with tab_transfers:
-        st.caption("Détail des transferts SOL explicitement détectés dans les transactions.")
+    with tab_operations:
         st.caption(
-            f"{len(filtered_transfers)} transfert(s) affiché(s) sur {len(result['transfers'])}."
+            "Opérations lisibles détectées automatiquement : transferts SOL, "
+            "transferts de tokens et swaps probables. "
+            "Un « swap probable » est déduit des variations nettes d'actifs "
+            "du même compte ; il ne dépend pas d'un DEX particulier."
         )
+        st.caption(
+            f"{len(filtered_operations)} opération(s) affichée(s) "
+            f"sur {len(result['operations'])}."
+        )
+
         show_table(
-            filtered_transfers,
-            table_kind="transfers",
-            empty_message="Aucun transfert ne correspond à la recherche.",
+            filtered_operations,
+            table_kind="operations",
+            empty_message="Aucune opération ne correspond à la recherche.",
         )
-        if filtered_transfers:
+
+        if filtered_operations:
             st.download_button(
-                "Télécharger les transferts affichés CSV",
-                data=to_csv_bytes(filtered_transfers),
-                file_name="solana_transfers.csv",
+                "Télécharger les opérations affichées CSV",
+                data=to_csv_bytes(filtered_operations),
+                file_name="solana_operations.csv",
                 mime="text/csv",
             )
 
     with tab_movements:
         st.caption(
-            "Vue complémentaire : variations de solde des comptes impliqués. "
-            "Un mouvement n'est pas nécessairement un transfert distinct."
+            "Vue de contrôle : variations de solde SOL et tokens observées "
+            "avant/après les transactions. Une variation n'est pas "
+            "nécessairement une opération distincte."
         )
         st.caption(
-            f"{len(filtered_movements)} variation(s) affichée(s) sur {len(result['movements'])}."
+            f"{len(filtered_movements)} variation(s) affichée(s) "
+            f"sur {len(result['movements'])}."
         )
+
         show_table(
             filtered_movements,
             table_kind="movements",
-            empty_message="Aucune variation de solde ne correspond à la recherche.",
+            empty_message=(
+                "Aucune variation de solde ne correspond à la recherche."
+            ),
         )
+
         if filtered_movements:
             st.download_button(
                 "Télécharger les variations affichées CSV",
@@ -462,13 +605,27 @@ if result:
 
     with tab_details:
         left, right = st.columns(2)
+
         with left:
             st.write("**Borne de début**")
             st.code(f"slot {result['start_slot']}")
             st.write("**Borne de fin**")
             st.code(f"slot {result['end_slot']}")
+
         with right:
             st.write("**Plage interrogée**")
-            st.code(f"{result['query_start_slot']} → {result['query_end_slot']}")
+            st.code(
+                f"{result['query_start_slot']} → "
+                f"{result['query_end_slot']}"
+            )
             st.write("**Blocs candidats / ignorés**")
-            st.code(f"{result['candidate_blocks']} / {result['skipped_blocks']}")
+            st.code(
+                f"{result['candidate_blocks']} / "
+                f"{result['skipped_blocks']}"
+            )
+
+        st.caption(
+            "L'analyse des tokens et des swaps utilise les métadonnées "
+            "déjà présentes dans les blocs téléchargés. "
+            "Elle n'ajoute pas de requête RPC par opération."
+        )
