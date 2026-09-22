@@ -522,6 +522,7 @@ def search_ethereum_window(
     operations_rows: list[dict[str, Any]] = []
     movements_rows: list[dict[str, Any]] = []
     raw_amount_evidence_rows: list[dict[str, Any]] = []
+    direct_native_match_rows: list[dict[str, Any]] = []
 
     analyzed_blocks = 0
     skipped_blocks = 0
@@ -699,6 +700,35 @@ def search_ethereum_window(
 
             if success and value_wei > 0:
                 amount_text = _format_decimal(value_eth)
+
+                if (
+                    target_asset == "ETH"
+                    and target_raw_units is not None
+                    and value_wei == target_raw_units
+                ):
+                    direct_native_match_rows.append(
+                        {
+                            "match_type": "transfer",
+                            "match_role": "Valeur native exacte",
+                            "block": block_number,
+                            "block_time_utc": block_time,
+                            "signature": tx_hash,
+                            "matched_amount": amount_text,
+                            "matched_asset": "ETH",
+                            "sent": f"{amount_text} ETH",
+                            "received": "",
+                            "source": sender,
+                            "destination": destination,
+                            "account": "",
+                            "detail": (
+                                "Correspondance exacte sur le champ value "
+                                f"({value_wei} wei)"
+                            ),
+                            "explorer": explorer,
+                            "secondary_explorer": secondary,
+                        }
+                    )
+
                 append_operation(
                     operation_type="transfer",
                     block_number=block_number,
@@ -968,6 +998,12 @@ def search_ethereum_window(
     matched_signature_asset_amount: set[tuple[str, str, str]] = set()
 
     if target_amount is not None:
+        for row in direct_native_match_rows:
+            matches_rows.append(row)
+            matched_signature_asset_amount.add(
+                (row["signature"], "ETH", row["matched_amount"])
+            )
+
         for operation in operations_rows:
             for leg in operation.get("legs", []):
                 try:
