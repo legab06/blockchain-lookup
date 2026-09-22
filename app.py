@@ -54,29 +54,37 @@ st.markdown(
             color: rgba(49, 51, 63, 0.86);
         }
 
-        /* Navigation des vues façon onglets Streamlit :
-           texte simple + trait sous l'onglet actif. */
+        /* Navigation des vues : texte seul, sans pastille ni ligne globale.
+           Seul l'onglet actif reçoit un soulignement rouge. */
         .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] {
             display: flex;
-            gap: 0.1rem;
-            border-bottom: 1px solid rgba(128, 128, 128, 0.22);
+            gap: 0.15rem;
+            border: 0 !important;
         }
-        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] > label {
+        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] label,
+        .st-key-result_tabs_nav [data-baseweb="radio"] {
             position: relative;
-            padding: 0.38rem 0.78rem 0.52rem 0.78rem;
-            margin: 0;
-            border-bottom: 2px solid transparent;
+            padding: 0.38rem 0.78rem 0.48rem 0.78rem !important;
+            margin: 0 !important;
+            border: 0 !important;
+            border-bottom: 2px solid transparent !important;
+            background: transparent !important;
             cursor: pointer;
-            transition: border-color 120ms ease, color 120ms ease;
         }
-        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] > label > div:first-child {
+        .st-key-result_tabs_nav [data-testid="stRadio"] input[type="radio"] {
+            position: absolute !important;
+            opacity: 0 !important;
+            width: 0 !important;
+            height: 0 !important;
+            pointer-events: none !important;
+        }
+        .st-key-result_tabs_nav [data-baseweb="radio"] > div:first-child,
+        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
             display: none !important;
         }
-        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] > label:has(input:checked) {
-            border-bottom-color: #ff4b4b;
-        }
-        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] > label:hover {
-            color: #ff4b4b;
+        .st-key-result_tabs_nav [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked),
+        .st-key-result_tabs_nav [data-baseweb="radio"]:has(input:checked) {
+            border-bottom-color: #ff4b4b !important;
         }
         @media (prefers-color-scheme: dark) {
             .compact-filter-title {
