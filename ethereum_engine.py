@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -56,6 +57,14 @@ StatusCallback = Callable[[str], None]
 
 class EthereumSearchError(RuntimeError):
     """Erreur lisible par l'interface lors d'une recherche Ethereum."""
+
+
+class _PrunedHistoryUnavailable(RuntimeError):
+    """Le backend RPC a élagué les blocs antérieurs à une certaine hauteur."""
+
+    def __init__(self, earliest_block: int, message: str):
+        super().__init__(message)
+        self.earliest_block = earliest_block
 
 
 def _notify(callback: StatusCallback | None, message: str) -> None:
@@ -268,11 +277,30 @@ def search_ethereum_window(
                     result = json.loads(response.read().decode("utf-8"))
 
                 if "error" in result:
-                    raise RuntimeError(result["error"])
+                    error = result["error"]
+                    if isinstance(error, dict):
+                        message = str(error.get("message") or error)
+                        earliest_match = re.search(
+                            r"earliest available\s+(\d+)",
+                            message,
+                            flags=re.IGNORECASE,
+                        )
+                        if (
+                            error.get("code") == 4444
+                            or "pruned history unavailable" in message.casefold()
+                        ) and earliest_match:
+                            raise _PrunedHistoryUnavailable(
+                                int(earliest_match.group(1)),
+                                message,
+                            )
+                    raise RuntimeError(error)
 
                 if rpc_delay:
                     time.sleep(rpc_delay)
                 return result.get("result")
+
+            except _PrunedHistoryUnavailable:
+                raise
 
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 and attempt < retries - 1:
@@ -408,8 +436,38 @@ def search_ethereum_window(
             f"({latest_dt.strftime('%d/%m/%Y %H:%M:%S UTC')})."
         )
 
+    minimum_available_block = 0
+    try:
+        earliest_available_ts = block_timestamp(0)
+    except _PrunedHistoryUnavailable as exc:
+        minimum_available_block = exc.earliest_block
+        earliest_available_ts = block_timestamp(minimum_available_block)
+        earliest_dt = datetime.fromtimestamp(
+            earliest_available_ts,
+            tz=timezone.utc,
+        )
+        _notify(
+            status_callback,
+            "Le RPC Ethereum utilisé est pruné : historique disponible à partir "
+            f"du bloc {minimum_available_block} "
+            f"({earliest_dt.strftime('%d/%m/%Y %H:%M:%S UTC')}).",
+        )
+    else:
+        earliest_dt = datetime.fromtimestamp(
+            earliest_available_ts,
+            tz=timezone.utc,
+        )
+
+    if end_ts < earliest_available_ts:
+        raise EthereumSearchError(
+            "Le RPC Ethereum public utilisé ne conserve pas l'historique assez ancien. "
+            f"Premier bloc disponible : {minimum_available_block} "
+            f"({earliest_dt.strftime('%d/%m/%Y %H:%M:%S UTC')}). "
+            "Cette recherche nécessite un RPC Ethereum avec historique archive."
+        )
+
     def first_block_at_or_after(target_ts: int) -> int:
-        low = 0
+        low = minimum_available_block
         high = latest_block
         answer = latest_block
 
@@ -424,9 +482,9 @@ def search_ethereum_window(
         return answer
 
     def last_block_at_or_before(target_ts: int) -> int:
-        low = 0
+        low = minimum_available_block
         high = latest_block
-        answer = 0
+        answer = minimum_available_block
 
         while low <= high:
             midpoint = (low + high) // 2
@@ -445,7 +503,7 @@ def search_ethereum_window(
     end_block = last_block_at_or_before(end_ts)
 
     query_start_block = max(
-        0,
+        minimum_available_block,
         min(start_block, end_block) - BOUNDARY_BLOCK_MARGIN,
     )
     query_end_block = min(
