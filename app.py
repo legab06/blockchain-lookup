@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime, time, timezone
 
 import pandas as pd
@@ -263,6 +264,12 @@ def apply_network_theme(network: str) -> None:
     )
 
 
+MAX_STATUS_MESSAGES = 60
+STATUS_LOG_HEIGHT = 220
+PROGRESS_BUCKETS = 50
+
+
+@st.cache_data(show_spinner=False)
 def to_csv_bytes(rows: list[dict]) -> bytes:
     return (
         pd.DataFrame(rows)
@@ -603,6 +610,7 @@ def render_downloads(
         file_name=filename,
         mime="text/csv",
         key=f"{key_prefix}_page_csv",
+        on_click="ignore",
     )
 
     if len(filtered_rows) > len(page_rows):
@@ -622,6 +630,7 @@ def render_downloads(
                 file_name=filename.replace(".csv", "_complet.csv"),
                 mime="text/csv",
                 key=f"{key_prefix}_full_csv",
+                on_click="ignore",
             )
 
 
@@ -646,6 +655,20 @@ def filter_rows(
         filtered.append(row)
 
     return filtered
+
+
+def clear_search_results() -> None:
+    for key in (
+        "lookup_result",
+        "global_result_search",
+        "tx_success_only",
+        "result_view",
+    ):
+        st.session_state.pop(key, None)
+
+    for prefix in ("matches", "transactions", "operations", "movements"):
+        for suffix in ("page", "page_size", "prepare_full_csv"):
+            st.session_state.pop(f"{prefix}_{suffix}", None)
 
 
 st.title("🔎 Blockchain Lookup")
@@ -772,14 +795,37 @@ if submitted:
             f"Recherche {network} en cours…",
             expanded=True,
         ) as status_box:
+            status_messages: deque[str] = deque(maxlen=MAX_STATUS_MESSAGES)
+            progress_ui_state = {"bucket": -1}
+
+            with st.container(height=STATUS_LOG_HEIGHT, border=False):
+                status_log = st.empty()
+
+            def render_status_log() -> None:
+                if not status_messages:
+                    status_log.caption("Aucun événement pour le moment.")
+                    return
+                status_log.text("\n".join(status_messages))
 
             def on_status(message: str) -> None:
-                status_box.write(message)
+                normalized = " ".join(str(message).split())
+                timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                status_messages.appendleft(f"[{timestamp}] {normalized}")
+                render_status_log()
 
             def on_progress(current: int, total: int, block_number: int) -> None:
                 if total <= 0:
                     progress_bar.progress(0, text="Aucun bloc candidat")
                     return
+
+                bucket = (
+                    PROGRESS_BUCKETS
+                    if current >= total
+                    else int(current * PROGRESS_BUCKETS / total)
+                )
+                if bucket == progress_ui_state["bucket"]:
+                    return
+                progress_ui_state["bucket"] = bucket
 
                 ratio = min(max(current / total, 0.0), 1.0)
                 unit = "slot" if network == "Solana" else "bloc"
@@ -790,6 +836,8 @@ if submitted:
                         f"· {unit} {block_number}"
                     ),
                 )
+
+            on_status("Initialisation de la recherche…")
 
             try:
                 if network == "Solana":
@@ -869,7 +917,22 @@ result = st.session_state.get("lookup_result")
 
 if result and result.get("network") == network:
     st.divider()
-    st.subheader("Résultats de la recherche")
+    title_col, clear_col = st.columns(
+        [5, 1.35],
+        vertical_alignment="center",
+    )
+
+    with title_col:
+        st.subheader("Résultats de la recherche")
+
+    with clear_col:
+        st.button(
+            "Effacer la recherche",
+            key="clear_blockchain_search",
+            on_click=clear_search_results,
+            icon=":material/delete_sweep:",
+            width="stretch",
+        )
 
     window_label = (
         f"{result['start_dt'].strftime('%d/%m/%Y %H:%M:%S')} → "
