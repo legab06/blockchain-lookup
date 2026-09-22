@@ -8,6 +8,14 @@ from decimal import Decimal, InvalidOperation
 # millionième de l'unité de l'actif. Cela évite les faux positifs grossiers.
 DEFAULT_MAX_APPROX_TOLERANCE = Decimal("0.000001")
 
+# Référence commune pour les actifs natifs. Le futur moteur Bitcoin pourra
+# directement réutiliser ce module avec BTC = 8 décimales (satoshi).
+NATIVE_ASSET_DECIMALS = {
+    "SOL": 9,
+    "ETH": 18,
+    "BTC": 8,
+}
+
 
 @dataclass(frozen=True)
 class AmountCriterion:
@@ -32,6 +40,11 @@ class AmountCriterion:
 
         if difference == 0:
             return "exact"
+
+        # Une recherche explicite de zéro reste stricte : accepter de petites
+        # valeurs non nulles comme "environ zéro" créerait trop de bruit.
+        if self.amount == 0:
+            return None
 
         if self.tolerance > 0 and difference < self.tolerance:
             return "approximate"
