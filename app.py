@@ -123,6 +123,7 @@ DISPLAY_COLUMN_LABELS = {
     "evidence": "Détection",
     "detail": "Détail",
     "match_role": "Correspondance",
+    "match_quality": "Précision",
     "matched_amount": "Montant",
     "matched_asset": "Actif",
     "asset": "Actif",
@@ -141,6 +142,7 @@ TABLE_COLUMNS = {
         "block_time_utc",
         "matched_amount",
         "matched_asset",
+        "match_quality",
         "match_role",
         "operation_type",
         "sent",
@@ -223,6 +225,15 @@ def localize_rows(rows: list[dict]) -> list[dict]:
                 item["match_type"],
                 item["match_type"],
             )
+        if "match_quality" in item:
+            item["match_quality"] = {
+                "exact": "Exacte",
+                "approximate": "Approchée",
+            }.get(item["match_quality"], item["match_quality"])
+        if item.get("match_target") == "EXACT":
+            item["match_target"] = "Exact"
+        elif item.get("match_target") == "APPROX":
+            item["match_target"] = "Approché"
         localized.append(item)
     return localized
 
@@ -691,20 +702,40 @@ if result and result.get("network") == network:
     m1.metric("Blocs analysés", result["analyzed_blocks"])
     m2.metric("Transactions", len(result["transactions"]))
     m3.metric("Opérations détectées", len(result["operations"]))
-    m4.metric("Résultats exacts", len(result["matches"]))
+    m4.metric("Correspondances", len(result["matches"]))
 
     if result["target_amount"] is not None:
         target_label = f"{result['target_amount']} {result['target_asset']}"
+        precision = result.get("target_amount_precision")
+        amount_tolerance = result.get("target_amount_tolerance")
+
         st.caption(f"Critère réellement utilisé : **{target_label}**")
+        if amount_tolerance is not None and precision is not None:
+            st.caption(
+                "Correspondance approchée : écart strictement inférieur à "
+                f"**{amount_tolerance} {result['target_asset']}** "
+                f"(précision saisie : {precision} décimale(s))."
+            )
 
         if result["matches"]:
+            exact_count = sum(
+                1
+                for row in result["matches"]
+                if row.get("match_quality") == "exact"
+            )
+            approximate_count = sum(
+                1
+                for row in result["matches"]
+                if row.get("match_quality") == "approximate"
+            )
             st.success(
-                f"{len(result['matches'])} correspondance(s) exacte(s) "
-                f"pour {target_label}."
+                f"{len(result['matches'])} correspondance(s) pour {target_label} "
+                f"· {exact_count} exacte(s) · "
+                f"{approximate_count} approchée(s)."
             )
         else:
             st.warning(
-                f"Aucune correspondance exacte pour {target_label}. "
+                f"Aucune correspondance pour {target_label}. "
                 "Consultez Transactions et Opérations pour examiner "
                 "toute la période."
             )
@@ -804,9 +835,10 @@ if result and result.get("network") == network:
             table_kind = "matches"
             key_prefix = "matches"
             filename = f"{result['network'].lower()}_matches.csv"
-            empty_message = "Aucun résultat exact trouvé."
+            empty_message = "Aucune correspondance trouvée."
             intro = (
-                "Correspondances exactes avec le montant et l'actif renseignés."
+                "Correspondances exactes ou approchées selon la précision "
+                "du montant renseigné."
             )
 
         elif view == "🧾 Transactions":
