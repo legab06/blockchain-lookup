@@ -260,25 +260,12 @@ def paginate_rows(
     return rows[start:end], page, total_pages, page_size
 
 
-def pagination_items(page: int, total_pages: int) -> list[int | None]:
-    if total_pages <= 7:
-        return list(range(1, total_pages + 1))
-
-    if page <= 4:
-        return [1, 2, 3, 4, 5, None, total_pages]
-
-    if page >= total_pages - 3:
-        return [
-            1,
-            None,
-            total_pages - 4,
-            total_pages - 3,
-            total_pages - 2,
-            total_pages - 1,
-            total_pages,
-        ]
-
-    return [1, None, page - 1, page, page + 1, None, total_pages]
+def change_page(page_key: str, delta: int, total_pages: int) -> None:
+    current = int(st.session_state.get(page_key, 1))
+    st.session_state[page_key] = max(
+        1,
+        min(current + delta, total_pages),
+    )
 
 
 def render_pagination_footer(
@@ -297,86 +284,67 @@ def render_pagination_footer(
     page_key = f"{key_prefix}_page"
     page_size_key = f"{key_prefix}_page_size"
 
-    size_col, spacer_col, info_col, nav_col = st.columns(
-        [1.35, 4.65, 2.1, 3.3],
+    spacer_col, footer_col = st.columns(
+        [7.2, 2.8],
         vertical_alignment="center",
     )
 
-    with size_col:
-        label_col, select_col = st.columns(
-            [0.9, 1.15],
+    with spacer_col:
+        st.empty()
+
+    with footer_col:
+        info_col, size_col, prev_col, page_col, next_col = st.columns(
+            [2.05, 1.25, 0.5, 1.25, 0.5],
             vertical_alignment="center",
         )
-        with label_col:
+
+        with info_col:
             st.markdown(
-                '<div class="table-footer-text">Afficher</div>',
+                (
+                    '<div class="table-footer-text table-footer-right">'
+                    f"{start_row:,}–{end_row:,} sur {total_rows:,}"
+                    "</div>"
+                ).replace(",", " "),
                 unsafe_allow_html=True,
             )
-        with select_col:
+
+        with size_col:
             st.selectbox(
                 "Lignes par page",
                 PAGE_SIZE_OPTIONS,
                 key=page_size_key,
                 label_visibility="collapsed",
+                format_func=lambda value: f"{value} / page",
             )
 
-    with spacer_col:
-        st.empty()
+        with prev_col:
+            st.button(
+                "‹",
+                key=f"{key_prefix}_page_prev",
+                disabled=page <= 1,
+                use_container_width=True,
+                on_click=change_page,
+                args=(page_key, -1, total_pages),
+            )
 
-    with info_col:
-        st.markdown(
-            (
-                '<div class="table-footer-text table-footer-right">'
-                f"{total_rows:,} résultats · {start_row:,}–{end_row:,}"
-                "</div>"
-            ).replace(",", " "),
-            unsafe_allow_html=True,
-        )
+        with page_col:
+            st.selectbox(
+                "Page",
+                range(1, total_pages + 1),
+                key=page_key,
+                label_visibility="collapsed",
+                format_func=lambda value: f"{value} / {total_pages}",
+            )
 
-    with nav_col:
-        items = pagination_items(page, total_pages)
-        nav_items: list[int | str | None] = ["prev", *items, "next"]
-        nav_columns = st.columns(
-            [0.75 if item is None else 1 for item in nav_items],
-            vertical_alignment="center",
-        )
-
-        for column, item in zip(nav_columns, nav_items):
-            with column:
-                if item == "prev":
-                    if st.button(
-                        "‹",
-                        key=f"{key_prefix}_page_prev",
-                        disabled=page <= 1,
-                        use_container_width=True,
-                    ):
-                        st.session_state[page_key] = page - 1
-                        st.rerun()
-                elif item == "next":
-                    if st.button(
-                        "›",
-                        key=f"{key_prefix}_page_next",
-                        disabled=page >= total_pages,
-                        use_container_width=True,
-                    ):
-                        st.session_state[page_key] = page + 1
-                        st.rerun()
-                elif item is None:
-                    st.markdown(
-                        '<div class="table-footer-text" '
-                        'style="text-align:center">…</div>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    target_page = int(item)
-                    if st.button(
-                        str(target_page),
-                        key=f"{key_prefix}_page_{target_page}",
-                        disabled=target_page == page,
-                        use_container_width=True,
-                    ):
-                        st.session_state[page_key] = target_page
-                        st.rerun()
+        with next_col:
+            st.button(
+                "›",
+                key=f"{key_prefix}_page_next",
+                disabled=page >= total_pages,
+                use_container_width=True,
+                on_click=change_page,
+                args=(page_key, 1, total_pages),
+            )
 
 
 def render_downloads(
