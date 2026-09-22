@@ -5,6 +5,7 @@ from datetime import datetime, time, timezone
 import pandas as pd
 import streamlit as st
 
+from bitcoin_engine import BitcoinSearchError, search_bitcoin_window
 from ethereum_engine import EthereumSearchError, search_ethereum_window
 from solana_engine import SolanaSearchError, search_solana_window
 
@@ -257,6 +258,9 @@ def show_table(
     elif network == "Ethereum":
         labels["explorer"] = "Etherscan"
         labels["secondary_explorer"] = "Blockscout"
+    elif network == "Bitcoin":
+        labels["explorer"] = "mempool.space"
+        labels["secondary_explorer"] = "Blockstream"
 
     table = pd.DataFrame(localize_rows(rows)).reindex(columns=columns)
     table = table.dropna(axis=1, how="all").rename(columns=labels)
@@ -498,7 +502,7 @@ with st.sidebar:
     elif network == "Ethereum":
         st.success("ETH · disponible")
     else:
-        st.info(f"{network} · module à ajouter")
+        st.success("BTC · disponible")
 
     st.divider()
     st.caption(
@@ -594,12 +598,7 @@ if submitted:
     submitted_asset = str(asset)
     submitted_network = str(network)
 
-    if network == "Bitcoin":
-        st.warning(
-            "Le moteur Bitcoin n'est pas encore branché. "
-            "Sélectionnez Solana ou Ethereum."
-        )
-    else:
+    if network in {"Solana", "Ethereum", "Bitcoin"}:
         progress_bar = st.progress(0, text="Initialisation…")
 
         with st.status(
@@ -636,12 +635,22 @@ if submitted:
                         progress_callback=on_progress,
                         status_callback=on_status,
                     )
-                else:
+                elif network == "Ethereum":
                     result = search_ethereum_window(
                         search_date=search_date,
                         search_time=search_time,
                         tolerance_seconds=int(tolerance),
                         amount_eth=submitted_amount,
+                        asset_symbol=submitted_asset,
+                        progress_callback=on_progress,
+                        status_callback=on_status,
+                    )
+                else:
+                    result = search_bitcoin_window(
+                        search_date=search_date,
+                        search_time=search_time,
+                        tolerance_seconds=int(tolerance),
+                        amount_btc=submitted_amount,
                         asset_symbol=submitted_asset,
                         progress_callback=on_progress,
                         status_callback=on_status,
@@ -653,7 +662,11 @@ if submitted:
                     expanded=True,
                 )
                 st.error(str(exc))
-            except (SolanaSearchError, EthereumSearchError) as exc:
+            except (
+                SolanaSearchError,
+                EthereumSearchError,
+                BitcoinSearchError,
+            ) as exc:
                 status_box.update(
                     label="Erreur pendant la recherche",
                     state="error",
@@ -699,6 +712,13 @@ if result and result.get("network") == network:
         f'<span class="utc-badge">{window_label}</span>',
         unsafe_allow_html=True,
     )
+
+    if result["network"] == "Bitcoin":
+        st.caption(
+            "Bitcoin n'horodate pas chaque transaction : la recherche UTC "
+            "s'appuie sur l'horodatage du bloc de confirmation. Les montants "
+            "sont recherchés dans les sorties (vout) en satoshis."
+        )
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Blocs analysés", result["analyzed_blocks"])
@@ -746,11 +766,12 @@ if result and result.get("network") == network:
         st.caption("Critère réellement utilisé : **aucun montant**")
 
     st.markdown("#### Vue des données")
-    movement_view = (
-        "📊 Variations de solde"
-        if result["network"] == "Solana"
-        else "📊 Mouvements"
-    )
+    if result["network"] == "Solana":
+        movement_view = "📊 Variations de solde"
+    elif result["network"] == "Bitcoin":
+        movement_view = "📊 Sorties BTC"
+    else:
+        movement_view = "📊 Mouvements"
     view_options = [
         "🎯 Résultats",
         "🧾 Transactions",
@@ -861,11 +882,21 @@ if result and result.get("network") == network:
             key_prefix = "operations"
             filename = f"{result['network'].lower()}_operations.csv"
             empty_message = "Aucune opération ne correspond à la recherche."
-            native_symbol = "SOL" if result["network"] == "Solana" else "ETH"
-            intro = (
-                f"Transferts {native_symbol}, transferts de tokens et swaps "
-                "probables détectés automatiquement."
-            )
+            native_symbol = {
+                "Solana": "SOL",
+                "Ethereum": "ETH",
+                "Bitcoin": "BTC",
+            }[result["network"]]
+            if result["network"] == "Bitcoin":
+                intro = (
+                    "Sorties BTC décodées directement depuis les transactions "
+                    "du bloc brut."
+                )
+            else:
+                intro = (
+                    f"Transferts {native_symbol}, transferts de tokens et swaps "
+                    "probables détectés automatiquement."
+                )
 
         else:
             source_rows = result["movements"]
@@ -878,6 +909,11 @@ if result and result.get("network") == network:
             if result["network"] == "Solana":
                 intro = (
                     "Variations de solde SOL et tokens avant/après les transactions."
+                )
+            elif result["network"] == "Bitcoin":
+                intro = (
+                    "Sorties BTC positives du bloc, décodées en satoshis et "
+                    "adresses standards lorsque le script le permet."
                 )
             else:
                 intro = (
