@@ -614,6 +614,19 @@ def search_ethereum_window(
             return
 
         explorer, secondary = _explorer_links(tx_hash)
+        match_quality = _target_match_quality(
+            target_asset=target_asset,
+            target_criterion=target_criterion,
+            target_token=target_token,
+            asset=asset,
+            token_address=token_address,
+            amount=delta,
+        )
+        match_marker = {
+            "exact": "EXACT",
+            "approximate": "APPROX",
+        }.get(match_quality, "")
+
         movements_rows.append(
             {
                 "block": block_number,
@@ -628,18 +641,7 @@ def search_ethereum_window(
                     ("+" if delta > 0 else "") + _format_decimal(delta)
                 ),
                 "absolute_delta_amount": _format_decimal(abs(delta)),
-                "match_target": (
-                    "OUI"
-                    if _target_matches(
-                        target_asset=target_asset,
-                        target_criterion=target_criterion,
-                        target_token=target_token,
-                        asset=asset,
-                        token_address=token_address,
-                        amount=delta,
-                    )
-                    else ""
-                ),
+                "match_target": match_marker,
                 "detail": detail,
                 "explorer": explorer,
                 "secondary_explorer": secondary,
