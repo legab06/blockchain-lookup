@@ -48,18 +48,93 @@ def to_csv_bytes(rows: list[dict]) -> bytes:
     return pd.DataFrame(rows).to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
 
 
-def show_table(rows: list[dict], *, empty_message: str) -> None:
+DISPLAY_COLUMN_LABELS = {
+    "block": "Bloc",
+    "block_time_utc": "Date / heure UTC",
+    "signature": "Transaction",
+    "source": "Expéditeur",
+    "destination": "Destinataire",
+    "sol": "Montant (SOL)",
+    "amount_sol": "Montant (SOL)",
+    "fee_sol": "Frais (SOL)",
+    "delta_sol": "Variation (SOL)",
+    "absolute_delta_sol": "Variation absolue (SOL)",
+    "account_count": "Nb. de comptes",
+    "accounts": "Comptes concernés",
+    "account": "Compte concerné",
+    "match_target": "Montant recherché ?",
+    "match_type": "Type de résultat",
+    "status": "État",
+    "explorer": "Explorateur",
+    "solscan": "Solscan",
+}
+
+TABLE_COLUMNS = {
+    "matches": [
+        "block",
+        "block_time_utc",
+        "signature",
+        "source",
+        "destination",
+        "account",
+        "amount_sol",
+        "explorer",
+        "solscan",
+    ],
+    "transactions": [
+        "block",
+        "block_time_utc",
+        "signature",
+        "status",
+        "fee_sol",
+        "account_count",
+        "accounts",
+        "explorer",
+        "solscan",
+    ],
+    "transfers": [
+        "block",
+        "block_time_utc",
+        "signature",
+        "source",
+        "destination",
+        "sol",
+        "match_target",
+        "explorer",
+        "solscan",
+    ],
+    "movements": [
+        "block",
+        "block_time_utc",
+        "signature",
+        "account",
+        "delta_sol",
+        "match_target",
+        "explorer",
+        "solscan",
+    ],
+}
+
+
+def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None:
     if not rows:
         st.info(empty_message)
         return
 
+    columns = TABLE_COLUMNS[table_kind]
+    table = pd.DataFrame(rows).reindex(columns=columns).rename(columns=DISPLAY_COLUMN_LABELS)
+    if "État" in table:
+        table["État"] = table["État"].replace(
+            {"SUCCESS": "Réussie", "FAILED": "Échouée"}
+        )
+
     st.dataframe(
-        pd.DataFrame(rows),
+        table,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "explorer": st.column_config.LinkColumn("Explorer", display_text="Ouvrir"),
-            "solscan": st.column_config.LinkColumn("Solscan", display_text="Ouvrir"),
+            "Explorateur": st.column_config.LinkColumn("Explorateur", display_text="Ouvrir"),
+            "Solscan": st.column_config.LinkColumn("Solscan", display_text="Ouvrir"),
         },
     )
 
@@ -186,24 +261,24 @@ if result:
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Blocs analysés", result["analyzed_blocks"])
     m2.metric("Transactions", len(result["transactions"]))
-    m3.metric("Transferts SOL", len(result["transfers"]))
-    m4.metric("Correspondances", len(result["matches"]))
+    m3.metric("Transferts", len(result["transfers"]))
+    m4.metric("Résultats", len(result["matches"]))
 
     if result["target_sol"] is not None:
         if result["matches"]:
             st.success(
-                f"{len(result['matches'])} correspondance(s) exacte(s) pour {result['target_sol']} SOL."
+                f"{len(result['matches'])} résultat(s) exact(s) pour {result['target_sol']} SOL."
             )
         else:
-            st.warning(f"Aucune correspondance exacte pour {result['target_sol']} SOL dans cette fenêtre.")
+            st.warning(f"Aucun résultat exact pour {result['target_sol']} SOL dans cette fenêtre.")
 
     tab_matches, tab_tx, tab_transfers, tab_movements, tab_details = st.tabs(
         [
-            "🎯 Correspondances",
+            "🎯 Résultats",
             "🧾 Transactions",
-            "↔️ Transferts SOL",
-            "📊 Mouvements",
-            "ℹ️ Détails",
+            "↔️ Transferts",
+            "📊 Variations de solde",
+            "ℹ️ Résumé de la recherche",
         ]
     )
 
@@ -213,18 +288,23 @@ if result:
         else:
             show_table(
                 result["matches"],
-                empty_message="Aucune correspondance exacte trouvée.",
+                table_kind="matches",
+                empty_message="Aucun résultat exact trouvé.",
             )
             if result["matches"]:
                 st.download_button(
-                    "Télécharger les correspondances CSV",
+                    "Télécharger les résultats CSV",
                     data=to_csv_bytes(result["matches"]),
                     file_name="solana_matches.csv",
                     mime="text/csv",
                 )
 
     with tab_tx:
-        show_table(result["transactions"], empty_message="Aucune transaction dans cette fenêtre.")
+        show_table(
+            result["transactions"],
+            table_kind="transactions",
+            empty_message="Aucune transaction dans cette fenêtre.",
+        )
         if result["transactions"]:
             st.download_button(
                 "Télécharger les transactions CSV",
@@ -234,7 +314,11 @@ if result:
             )
 
     with tab_transfers:
-        show_table(result["transfers"], empty_message="Aucun transfert SOL détecté.")
+        show_table(
+            result["transfers"],
+            table_kind="transfers",
+            empty_message="Aucun transfert détecté.",
+        )
         if result["transfers"]:
             st.download_button(
                 "Télécharger les transferts CSV",
@@ -244,10 +328,14 @@ if result:
             )
 
     with tab_movements:
-        show_table(result["movements"], empty_message="Aucun mouvement de solde détecté.")
+        show_table(
+            result["movements"],
+            table_kind="movements",
+            empty_message="Aucune variation de solde détectée.",
+        )
         if result["movements"]:
             st.download_button(
-                "Télécharger les mouvements CSV",
+                "Télécharger les variations de solde CSV",
                 data=to_csv_bytes(result["movements"]),
                 file_name="solana_movements.csv",
                 mime="text/csv",
