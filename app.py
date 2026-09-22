@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timezone
-from io import BytesIO
-
 import pandas as pd
 import streamlit as st
 
@@ -51,6 +49,7 @@ def to_csv_bytes(rows: list[dict]) -> bytes:
 DISPLAY_COLUMN_LABELS = {
     "block": "Bloc",
     "block_time_utc": "Date / heure UTC",
+    "transaction_index": "N° dans le bloc",
     "signature": "Transaction",
     "source": "Expéditeur",
     "destination": "Destinataire",
@@ -61,57 +60,72 @@ DISPLAY_COLUMN_LABELS = {
     "absolute_delta_sol": "Variation absolue (SOL)",
     "account_count": "Nb. de comptes",
     "accounts": "Comptes concernés",
+    "transfer_count": "Nb. de transferts",
+    "transfer_amounts_sol": "Montant(s) transféré(s)",
+    "transfer_parties": "Expéditeur → destinataire",
     "account": "Compte concerné",
     "match_target": "Montant recherché ?",
     "match_type": "Type de résultat",
-    "status": "État",
+    "instruction_type": "Type d’opération",
+    "detail": "Détail",
+    "error": "Erreur",
+    "status": "Statut",
     "explorer": "Explorateur",
     "solscan": "Solscan",
 }
 
 TABLE_COLUMNS = {
     "matches": [
-        "block",
         "block_time_utc",
-        "signature",
+        "amount_sol",
         "source",
         "destination",
         "account",
-        "amount_sol",
-        "explorer",
+        "signature",
+        "match_type",
+        "detail",
         "solscan",
+        "explorer",
+        "block",
     ],
     "transactions": [
-        "block",
         "block_time_utc",
-        "signature",
+        "transfer_amounts_sol",
+        "transfer_count",
         "status",
+        "signature",
+        "transfer_parties",
         "fee_sol",
         "account_count",
         "accounts",
-        "explorer",
         "solscan",
+        "explorer",
+        "block",
+        "transaction_index",
+        "error",
     ],
     "transfers": [
-        "block",
         "block_time_utc",
-        "signature",
+        "sol",
         "source",
         "destination",
-        "sol",
+        "signature",
         "match_target",
-        "explorer",
+        "instruction_type",
         "solscan",
+        "explorer",
+        "block",
     ],
     "movements": [
-        "block",
         "block_time_utc",
-        "signature",
-        "account",
+        "absolute_delta_sol",
         "delta_sol",
+        "account",
+        "signature",
         "match_target",
-        "explorer",
         "solscan",
+        "explorer",
+        "block",
     ],
 }
 
@@ -123,8 +137,8 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
 
     columns = TABLE_COLUMNS[table_kind]
     table = pd.DataFrame(rows).reindex(columns=columns).rename(columns=DISPLAY_COLUMN_LABELS)
-    if "État" in table:
-        table["État"] = table["État"].replace(
+    if "Statut" in table:
+        table["Statut"] = table["Statut"].replace(
             {"SUCCESS": "Réussie", "FAILED": "Échouée"}
         )
 
@@ -139,9 +153,41 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
     )
 
 
+def filter_transactions(rows: list[dict], query: str, only_success: bool) -> list[dict]:
+    query = query.strip().casefold()
+    filtered: list[dict] = []
+
+    for row in rows:
+        if only_success and row.get("status") != "SUCCESS":
+            continue
+
+        if query:
+            searchable = " ".join(
+                str(row.get(key, ""))
+                for key in (
+                    "block",
+                    "block_time_utc",
+                    "signature",
+                    "status",
+                    "fee_sol",
+                    "accounts",
+                    "transfer_amounts_sol",
+                    "transfer_parties",
+                    "error",
+                )
+            ).casefold()
+
+            if query not in searchable:
+                continue
+
+        filtered.append(row)
+
+    return filtered
+
+
 st.title("🔎 Blockchain Lookup")
 st.markdown(
-    '<div class="lookup-subtitle">Recherche de transactions par date, heure et montant.</div>',
+    '<div class="lookup-subtitle">Retrouver une opération blockchain à partir d’une date, d’une heure approximative et, si disponible, d’un montant.</div>',
     unsafe_allow_html=True,
 )
 
@@ -165,6 +211,7 @@ now_utc = datetime.now(timezone.utc)
 
 with st.form("lookup_form", border=True):
     st.subheader("Critères de recherche")
+    st.caption("Saisissez les éléments communiqués par le prestataire. Le montant est facultatif.")
 
     col_date, col_time, col_tolerance = st.columns([1.15, 1.15, 1])
 
@@ -177,7 +224,7 @@ with st.form("lookup_form", border=True):
 
     with col_time:
         search_time = st.time_input(
-            "Heure UTC",
+            "Heure approximative UTC",
             value=time(now_utc.hour, now_utc.minute, now_utc.second),
             step=1,
         )
@@ -192,13 +239,13 @@ with st.form("lookup_form", border=True):
         )
 
     amount = st.text_input(
-        "Montant",
-        placeholder="Optionnel — ex. 1.25",
-        help="Pour Solana, le montant est exprimé en SOL. Virgule ou point acceptés.",
+        "Montant (SOL) — facultatif",
+        placeholder="Ex. 1,25",
+        help="Laissez vide si le montant est inconnu ou incertain. Virgule ou point acceptés.",
     )
 
     submitted = st.form_submit_button(
-        "Lancer la recherche",
+        "Rechercher",
         type="primary",
         use_container_width=True,
     )
@@ -250,7 +297,7 @@ result = st.session_state.get("solana_result")
 
 if result:
     st.divider()
-    st.subheader("Résultats")
+    st.subheader("Résultats de la recherche")
 
     window_label = (
         f"{result['start_dt'].strftime('%d/%m/%Y %H:%M:%S')} → "
@@ -262,7 +309,7 @@ if result:
     m1.metric("Blocs analysés", result["analyzed_blocks"])
     m2.metric("Transactions", len(result["transactions"]))
     m3.metric("Transferts", len(result["transfers"]))
-    m4.metric("Résultats", len(result["matches"]))
+    m4.metric("Résultats exacts", len(result["matches"]))
 
     if result["target_sol"] is not None:
         if result["matches"]:
@@ -270,7 +317,10 @@ if result:
                 f"{len(result['matches'])} résultat(s) exact(s) pour {result['target_sol']} SOL."
             )
         else:
-            st.warning(f"Aucun résultat exact pour {result['target_sol']} SOL dans cette fenêtre.")
+            st.warning(
+                f"Aucune correspondance exacte pour {result['target_sol']} SOL. "
+                "Consultez l’onglet Transactions pour examiner toutes les opérations de la période."
+            )
 
     tab_matches, tab_tx, tab_transfers, tab_movements, tab_details = st.tabs(
         [
@@ -283,11 +333,21 @@ if result:
     )
 
     with tab_matches:
+        st.caption("Correspondances exactes avec le montant renseigné.")
         if result["target_sol"] is None:
-            st.info("Aucun montant cible n'a été renseigné pour cette recherche.")
+            st.info("Aucun montant n'a été renseigné. Consultez Transactions pour parcourir toute la période.")
         else:
+            match_rows = []
+            for row in result["matches"]:
+                item = dict(row)
+                item["match_type"] = {
+                    "instruction": "Transfert",
+                    "balance_delta": "Variation de solde",
+                }.get(item.get("match_type"), item.get("match_type", ""))
+                match_rows.append(item)
+
             show_table(
-                result["matches"],
+                match_rows,
                 table_kind="matches",
                 empty_message="Aucun résultat exact trouvé.",
             )
@@ -300,20 +360,44 @@ if result:
                 )
 
     with tab_tx:
+        st.caption(
+            "Toutes les transactions trouvées dans la fenêtre, même si le montant ne correspond pas exactement."
+        )
+
+        search_col, status_col = st.columns([3, 1])
+        with search_col:
+            tx_query = st.text_input(
+                "Rechercher dans les transactions",
+                placeholder="Hash, adresse, montant, bloc, heure…",
+                key="tx_search",
+            )
+        with status_col:
+            only_success = st.checkbox(
+                "Réussies uniquement",
+                value=False,
+                key="tx_success_only",
+            )
+
+        filtered_tx = filter_transactions(result["transactions"], tx_query, only_success)
+        st.caption(
+            f"{len(filtered_tx)} transaction(s) affichée(s) sur {len(result['transactions'])}."
+        )
+
         show_table(
-            result["transactions"],
+            filtered_tx,
             table_kind="transactions",
-            empty_message="Aucune transaction dans cette fenêtre.",
+            empty_message="Aucune transaction ne correspond à ce filtre.",
         )
         if result["transactions"]:
             st.download_button(
-                "Télécharger les transactions CSV",
+                "Télécharger toutes les transactions CSV",
                 data=to_csv_bytes(result["transactions"]),
                 file_name="solana_transactions.csv",
                 mime="text/csv",
             )
 
     with tab_transfers:
+        st.caption("Détail des transferts SOL explicitement détectés dans les transactions.")
         show_table(
             result["transfers"],
             table_kind="transfers",
@@ -328,6 +412,10 @@ if result:
             )
 
     with tab_movements:
+        st.caption(
+            "Vue complémentaire : variations de solde des comptes impliqués. "
+            "Un mouvement n'est pas nécessairement un transfert distinct."
+        )
         show_table(
             result["movements"],
             table_kind="movements",

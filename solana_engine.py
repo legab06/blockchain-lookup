@@ -11,6 +11,7 @@ from typing import Callable, Any
 DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com"
 DEFAULT_RPC_DELAY = 0.15
 BOUNDARY_SLOT_MARGIN = 10
+MAX_SUPPORTED_TRANSACTION_VERSION = 1
 LAMPORTS_PER_SOL = Decimal("1000000000")
 
 ProgressCallback = Callable[[int, int, int], None]
@@ -104,11 +105,20 @@ def search_solana_window(
                     result = json.loads(response.read().decode())
 
                 if "error" in result:
-                    raise RuntimeError(result["error"])
+                    error = result["error"]
+                    if isinstance(error, dict) and error.get("code") == -32015:
+                        raise SolanaSearchError(
+                            "Version de transaction Solana non prise en charge par le client : "
+                            f"{error.get('message', error)}"
+                        )
+                    raise RuntimeError(error)
 
                 if rpc_delay:
                     time.sleep(rpc_delay)
                 return result["result"]
+
+            except SolanaSearchError:
+                raise
 
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 and attempt < retries - 1:
@@ -332,7 +342,7 @@ def search_solana_window(
                         "transactionDetails": "full",
                         "rewards": False,
                         "commitment": "finalized",
-                        "maxSupportedTransactionVersion": 1,
+                        "maxSupportedTransactionVersion": MAX_SUPPORTED_TRANSACTION_VERSION,
                     },
                 ],
             )
@@ -464,6 +474,24 @@ def search_solana_window(
 
     if progress_callback:
         progress_callback(total_candidates, total_candidates, query_end_slot)
+
+    # Enrichit la vue Transactions avec les transferts SOL explicites détectés.
+    # Une transaction peut contenir plusieurs transferts : on conserve donc la liste.
+    transfers_by_signature: dict[str, list[dict[str, Any]]] = {}
+    for transfer in transfers_rows:
+        transfers_by_signature.setdefault(transfer["signature"], []).append(transfer)
+
+    for transaction_row in transactions_rows:
+        tx_transfers = transfers_by_signature.get(transaction_row["signature"], [])
+        transaction_row["transfer_count"] = len(tx_transfers)
+        transaction_row["transfer_amounts_sol"] = " | ".join(
+            f"{transfer['sol']} SOL" for transfer in tx_transfers
+        )
+        transaction_row["transfer_parties"] = " | ".join(
+            f"{transfer.get('source', '')} → {transfer.get('destination', '')}"
+            for transfer in tx_transfers
+            if transfer.get("source") or transfer.get("destination")
+        )
 
     unique_matches = []
     seen_matches = set()
