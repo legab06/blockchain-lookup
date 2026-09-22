@@ -204,7 +204,7 @@ def apply_network_theme(network: str) -> None:
                 color: var(--chain-accent) !important;
                 background: var(--chain-soft) !important;
             }}
-            .st-key-network_select_${network.toLowerCase()} [data-testid="stButton"] > button {{
+            .st-key-network_select_{network.lower()} [data-testid="stButton"] > button {{
                 border-color: var(--chain-ring) !important;
                 background: var(--chain-soft) !important;
                 color: var(--chain-accent) !important;
