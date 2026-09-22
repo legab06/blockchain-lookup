@@ -4,15 +4,26 @@ import json
 import time
 import urllib.error
 import urllib.request
+from collections import defaultdict
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Callable, Any
+from typing import Any, Callable
 
 DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com"
 DEFAULT_RPC_DELAY = 0.15
 BOUNDARY_SLOT_MARGIN = 10
 MAX_SUPPORTED_TRANSACTION_VERSION = 1
 LAMPORTS_PER_SOL = Decimal("1000000000")
+
+KNOWN_TOKEN_MINTS = {
+    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    "PYUSD": "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
+    "USDG": "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH",
+}
+WSOL_MINT = "So11111111111111111111111111111111111111112"
+MINT_TO_SYMBOL = {mint: symbol for symbol, mint in KNOWN_TOKEN_MINTS.items()}
+MINT_TO_SYMBOL[WSOL_MINT] = "WSOL"
 
 ProgressCallback = Callable[[int, int, int], None]
 StatusCallback = Callable[[str], None]
@@ -27,27 +38,61 @@ def _notify(callback: StatusCallback | None, message: str) -> None:
         callback(message)
 
 
-def _parse_amount(amount_sol: str | Decimal | None) -> tuple[Decimal | None, int | None]:
-    if amount_sol is None:
-        return None, None
+def _parse_amount(value: str | Decimal | None, asset: str) -> Decimal | None:
+    if value is None:
+        return None
 
-    raw = str(amount_sol).strip().replace(",", ".")
+    raw = str(value).strip().replace(",", ".")
     if not raw:
-        return None, None
+        return None
 
     try:
         amount = Decimal(raw)
     except InvalidOperation as exc:
-        raise ValueError("Montant SOL invalide.") from exc
+        raise ValueError("Montant invalide.") from exc
 
     if amount < 0:
-        raise ValueError("Le montant SOL doit être positif ou nul.")
+        raise ValueError("Le montant doit être positif ou nul.")
 
-    lamports = amount * LAMPORTS_PER_SOL
-    if lamports != lamports.to_integral_value():
-        raise ValueError("Le montant SOL ne peut pas dépasser 9 décimales.")
+    if asset == "SOL":
+        lamports = amount * LAMPORTS_PER_SOL
+        if lamports != lamports.to_integral_value():
+            raise ValueError("Un montant SOL ne peut pas dépasser 9 décimales.")
 
-    return amount, int(lamports)
+    return amount
+
+
+def _format_decimal(value: Decimal) -> str:
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _asset_label(mint: str) -> str:
+    if not mint:
+        return "Token"
+    if mint in MINT_TO_SYMBOL:
+        return MINT_TO_SYMBOL[mint]
+    if len(mint) > 10:
+        return f"{mint[:4]}…{mint[-4:]}"
+    return mint
+
+
+def _token_balance_amount(entry: dict[str, Any] | None) -> tuple[Decimal, int]:
+    if not entry:
+        return Decimal(0), 0
+
+    ui = entry.get("uiTokenAmount") or {}
+    raw_amount = str(ui.get("amount", "0"))
+    decimals = int(ui.get("decimals", 0) or 0)
+
+    try:
+        amount = Decimal(raw_amount) / (Decimal(10) ** decimals)
+    except (InvalidOperation, ValueError):
+        amount = Decimal(0)
+
+    return amount, decimals
 
 
 def search_solana_window(
@@ -56,6 +101,7 @@ def search_solana_window(
     tolerance_seconds: int = 30,
     amount_sol: str | Decimal | None = None,
     *,
+    asset_symbol: str = "SOL",
     rpc_url: str = DEFAULT_RPC_URL,
     rpc_delay: float = DEFAULT_RPC_DELAY,
     retries: int = 10,
@@ -65,14 +111,21 @@ def search_solana_window(
     """
     Recherche les transactions Solana situées dans une fenêtre UTC.
 
-    Le résultat contient les mêmes catégories que le script CLI d'origine :
-    transactions, transferts SOL, variations de solde et correspondances du montant.
+    amount_sol conserve son nom pour compatibilité avec la première version de
+    l'application, mais représente désormais le montant communiqué pour
+    l'actif choisi avec asset_symbol.
     """
 
     if tolerance_seconds < 0:
         raise ValueError("La tolérance doit être positive ou nulle.")
 
-    target_sol, target_lamports = _parse_amount(amount_sol)
+    target_asset = str(asset_symbol or "SOL").strip().upper()
+    target_mint = KNOWN_TOKEN_MINTS.get(target_asset, "")
+    target_amount = _parse_amount(amount_sol, target_asset)
+
+    target_lamports: int | None = None
+    if target_asset == "SOL" and target_amount is not None:
+        target_lamports = int(target_amount * LAMPORTS_PER_SOL)
 
     center_dt = datetime.combine(search_date, search_time).replace(tzinfo=timezone.utc)
     start_dt = center_dt - timedelta(seconds=tolerance_seconds)
@@ -97,7 +150,7 @@ def search_solana_window(
                     data=data,
                     headers={
                         "Content-Type": "application/json",
-                        "User-Agent": "BlockchainLookupStreamlit/1.0",
+                        "User-Agent": "BlockchainLookupStreamlit/2.0",
                     },
                 )
 
@@ -108,7 +161,7 @@ def search_solana_window(
                     error = result["error"]
                     if isinstance(error, dict) and error.get("code") == -32015:
                         raise SolanaSearchError(
-                            "Version de transaction Solana non prise en charge par le client : "
+                            "Version de transaction Solana non prise en charge : "
                             f"{error.get('message', error)}"
                         )
                     raise RuntimeError(error)
@@ -196,6 +249,21 @@ def search_solana_window(
 
         return best_slot, best_time
 
+    def target_matches(asset: str, mint: str, amount: Decimal) -> bool:
+        if target_amount is None:
+            return False
+
+        if abs(amount) != target_amount:
+            return False
+
+        if target_asset == "SOL":
+            return asset in {"SOL", "WSOL"} or mint == WSOL_MINT
+
+        if target_mint:
+            return mint == target_mint
+
+        return asset.upper() == target_asset
+
     _notify(status_callback, "Recherche de la borne de début…")
     start_slot, start_slot_time = find_nearest_slot_for_timestamp(start_ts)
 
@@ -217,39 +285,40 @@ def search_solana_window(
     transactions_rows: list[dict[str, Any]] = []
     transfers_rows: list[dict[str, Any]] = []
     movements_rows: list[dict[str, Any]] = []
-    matches_rows: list[dict[str, Any]] = []
+    operations_rows: list[dict[str, Any]] = []
 
     analyzed_blocks = 0
     skipped_blocks = 0
 
-    def add_match(
-        match_type: str,
+    def append_operation(
+        *,
+        operation_type: str,
         block_slot: int,
         block_time: str,
         signature: str,
-        amount_lamports: int,
+        sent: str = "",
+        received: str = "",
         source: str = "",
         destination: str = "",
         account: str = "",
+        evidence: str = "",
         detail: str = "",
+        legs: list[dict[str, str]] | None = None,
     ) -> None:
-        if target_lamports is None:
-            return
-        if abs(int(amount_lamports)) != target_lamports:
-            return
-
-        matches_rows.append(
+        operations_rows.append(
             {
-                "match_type": match_type,
+                "operation_type": operation_type,
                 "block": block_slot,
                 "block_time_utc": block_time,
                 "signature": signature,
+                "sent": sent,
+                "received": received,
                 "source": source,
                 "destination": destination,
                 "account": account,
-                "amount_lamports": int(amount_lamports),
-                "amount_sol": f"{Decimal(abs(int(amount_lamports))) / LAMPORTS_PER_SOL:.9f}",
+                "evidence": evidence,
                 "detail": detail,
+                "legs": legs or [],
                 "explorer": f"https://explorer.solana.com/tx/{signature}",
                 "solscan": f"https://solscan.io/tx/{signature}",
             }
@@ -270,6 +339,9 @@ def search_solana_window(
             return
 
         instruction_type = parsed.get("type", "")
+        if instruction_type not in {"transfer", "transferWithSeed"}:
+            return
+
         info = parsed.get("info", {})
         if not isinstance(info, dict):
             return
@@ -291,6 +363,8 @@ def search_solana_window(
             or info.get("newAccountPubkey")
             or ""
         )
+        amount = Decimal(lamports) / LAMPORTS_PER_SOL
+        amount_text = _format_decimal(amount)
 
         transfers_rows.append(
             {
@@ -302,28 +376,124 @@ def search_solana_window(
                 "source": source,
                 "destination": destination,
                 "lamports": lamports,
-                "sol": f"{Decimal(lamports) / LAMPORTS_PER_SOL:.9f}",
-                "match_target": (
-                    "OUI"
-                    if target_lamports is not None and lamports == target_lamports
-                    else ""
-                ),
+                "sol": amount_text,
+                "match_target": "OUI" if target_matches("SOL", "", amount) else "",
                 "explorer": f"https://explorer.solana.com/tx/{signature}",
                 "solscan": f"https://solscan.io/tx/{signature}",
             }
         )
 
-        if target_lamports is not None and lamports == target_lamports:
-            add_match(
-                match_type="instruction",
-                block_slot=block_slot,
-                block_time=block_time,
-                signature=signature,
-                amount_lamports=lamports,
-                source=source,
-                destination=destination,
-                detail=f"{location} / {instruction_type}",
-            )
+        # Les inner instructions servent de preuve technique, mais on évite de
+        # les présenter comme des opérations utilisateur distinctes.
+        if not location.startswith("outer:"):
+            return
+
+        append_operation(
+            operation_type="transfer",
+            block_slot=block_slot,
+            block_time=block_time,
+            signature=signature,
+            sent=f"{amount_text} SOL",
+            source=source,
+            destination=destination,
+            evidence="Instruction de transfert SOL",
+            detail=instruction_type,
+            legs=[
+                {
+                    "direction": "transfer",
+                    "asset": "SOL",
+                    "mint": "",
+                    "amount": amount_text,
+                }
+            ],
+        )
+
+    def extract_token_instruction(
+        instruction: Any,
+        block_slot: int,
+        block_time: str,
+        signature: str,
+        location: str,
+        token_accounts: dict[str, dict[str, Any]],
+    ) -> None:
+        if not isinstance(instruction, dict):
+            return
+
+        parsed = instruction.get("parsed")
+        if not isinstance(parsed, dict):
+            return
+
+        instruction_type = parsed.get("type", "")
+        if instruction_type not in {"transfer", "transferChecked"}:
+            return
+
+        info = parsed.get("info", {})
+        if not isinstance(info, dict):
+            return
+
+        source_account = str(info.get("source") or "")
+        destination_account = str(info.get("destination") or "")
+        source_meta = token_accounts.get(source_account, {})
+        destination_meta = token_accounts.get(destination_account, {})
+
+        mint = str(
+            info.get("mint")
+            or source_meta.get("mint")
+            or destination_meta.get("mint")
+            or ""
+        )
+
+        token_amount = info.get("tokenAmount")
+        decimals = None
+        raw_amount = None
+
+        if isinstance(token_amount, dict):
+            raw_amount = token_amount.get("amount")
+            decimals = token_amount.get("decimals")
+
+        if raw_amount is None:
+            raw_amount = info.get("amount")
+
+        if decimals is None:
+            decimals = source_meta.get("decimals")
+        if decimals is None:
+            decimals = destination_meta.get("decimals")
+
+        if raw_amount is None or decimals is None:
+            return
+
+        try:
+            amount = Decimal(str(raw_amount)) / (Decimal(10) ** int(decimals))
+        except (InvalidOperation, TypeError, ValueError):
+            return
+
+        asset = _asset_label(mint)
+        amount_text = _format_decimal(amount)
+        source = str(source_meta.get("owner") or info.get("authority") or source_account)
+        destination = str(destination_meta.get("owner") or destination_account)
+
+        if not location.startswith("outer:"):
+            return
+
+        append_operation(
+            operation_type="token_transfer",
+            block_slot=block_slot,
+            block_time=block_time,
+            signature=signature,
+            sent=f"{amount_text} {asset}",
+            source=source,
+            destination=destination,
+            evidence="Instruction de transfert de token",
+            detail=instruction_type,
+            legs=[
+                {
+                    "direction": "transfer",
+                    "asset": asset,
+                    "mint": mint,
+                    "amount": amount_text,
+                }
+            ],
+        )
 
     total_candidates = len(blocks_to_check)
     _notify(status_callback, f"Analyse de {total_candidates} blocs candidats…")
@@ -385,13 +555,20 @@ def search_solana_window(
             pre_balances = meta.get("preBalances", [])
             post_balances = meta.get("postBalances", [])
 
-            addresses = []
+            addresses: list[str] = []
+            signer_addresses: set[str] = set()
+
             for account in account_keys:
                 if isinstance(account, dict):
-                    address = account.get("pubkey", "")
+                    address = str(account.get("pubkey", ""))
+                    if account.get("signer"):
+                        signer_addresses.add(address)
                 else:
                     address = str(account)
                 addresses.append(address)
+
+            if addresses:
+                signer_addresses.add(addresses[0])
 
             transactions_rows.append(
                 {
@@ -401,7 +578,9 @@ def search_solana_window(
                     "signature": signature,
                     "status": "SUCCESS" if success else "FAILED",
                     "fee_lamports": fee_lamports,
-                    "fee_sol": f"{Decimal(fee_lamports) / LAMPORTS_PER_SOL:.9f}",
+                    "fee_sol": _format_decimal(
+                        Decimal(fee_lamports) / LAMPORTS_PER_SOL
+                    ),
                     "account_count": len(addresses),
                     "accounts": " | ".join(addresses),
                     "error": "" if success else json.dumps(meta.get("err"), ensure_ascii=False),
@@ -410,13 +589,110 @@ def search_solana_window(
                 }
             )
 
+            owner_asset_deltas: dict[tuple[str, str, str], Decimal] = defaultdict(Decimal)
+
+            # Variations natives SOL.
             for account_index, address in enumerate(addresses):
                 if account_index >= len(pre_balances) or account_index >= len(post_balances):
                     continue
 
-                before = int(pre_balances[account_index])
-                after = int(post_balances[account_index])
+                before_lamports = int(pre_balances[account_index])
+                after_lamports = int(post_balances[account_index])
+                delta_lamports = after_lamports - before_lamports
+
+                if delta_lamports == 0:
+                    continue
+
+                before = Decimal(before_lamports) / LAMPORTS_PER_SOL
+                after = Decimal(after_lamports) / LAMPORTS_PER_SOL
+                delta = Decimal(delta_lamports) / LAMPORTS_PER_SOL
+
+                movements_rows.append(
+                    {
+                        "block": block_slot,
+                        "block_time_utc": block_time,
+                        "signature": signature,
+                        "account": address,
+                        "asset": "SOL",
+                        "mint": "",
+                        "balance_before": _format_decimal(before),
+                        "balance_after": _format_decimal(after),
+                        "delta_amount": (
+                            ("+" if delta > 0 else "") + _format_decimal(delta)
+                        ),
+                        "absolute_delta_amount": _format_decimal(abs(delta)),
+                        "match_target": "OUI" if target_matches("SOL", "", delta) else "",
+                        "explorer": f"https://explorer.solana.com/tx/{signature}",
+                        "solscan": f"https://solscan.io/tx/{signature}",
+                    }
+                )
+
+                if address in signer_addresses:
+                    economic_delta_lamports = delta_lamports
+                    if account_index == 0:
+                        # Le premier compte paie habituellement les frais.
+                        economic_delta_lamports += fee_lamports
+
+                    if economic_delta_lamports:
+                        owner_asset_deltas[(address, "SOL", "")] += (
+                            Decimal(economic_delta_lamports) / LAMPORTS_PER_SOL
+                        )
+
+            # Variations des tokens SPL déjà présentes dans les métadonnées RPC.
+            pre_token_balances = meta.get("preTokenBalances") or []
+            post_token_balances = meta.get("postTokenBalances") or []
+
+            token_states: dict[tuple[int, str], dict[str, Any]] = {}
+
+            for entry in pre_token_balances:
+                try:
+                    account_index = int(entry.get("accountIndex"))
+                except (TypeError, ValueError):
+                    continue
+                mint = str(entry.get("mint") or "")
+                if not mint:
+                    continue
+                token_states.setdefault((account_index, mint), {})["pre"] = entry
+
+            for entry in post_token_balances:
+                try:
+                    account_index = int(entry.get("accountIndex"))
+                except (TypeError, ValueError):
+                    continue
+                mint = str(entry.get("mint") or "")
+                if not mint:
+                    continue
+                token_states.setdefault((account_index, mint), {})["post"] = entry
+
+            token_accounts: dict[str, dict[str, Any]] = {}
+
+            for (account_index, mint), state in token_states.items():
+                pre_entry = state.get("pre")
+                post_entry = state.get("post")
+
+                before, pre_decimals = _token_balance_amount(pre_entry)
+                after, post_decimals = _token_balance_amount(post_entry)
+                decimals = post_decimals if post_entry else pre_decimals
                 delta = after - before
+
+                owner = str(
+                    (post_entry or {}).get("owner")
+                    or (pre_entry or {}).get("owner")
+                    or ""
+                )
+                asset = _asset_label(mint)
+
+                token_account_address = (
+                    addresses[account_index] if 0 <= account_index < len(addresses) else ""
+                )
+                if token_account_address:
+                    token_accounts[token_account_address] = {
+                        "owner": owner,
+                        "mint": mint,
+                        "asset": asset,
+                        "decimals": decimals,
+                    }
+
                 if delta == 0:
                     continue
 
@@ -425,42 +701,111 @@ def search_solana_window(
                         "block": block_slot,
                         "block_time_utc": block_time,
                         "signature": signature,
-                        "account": address,
-                        "balance_before_lamports": before,
-                        "balance_after_lamports": after,
-                        "delta_lamports": delta,
-                        "delta_sol": f"{Decimal(delta) / LAMPORTS_PER_SOL:+.9f}",
-                        "absolute_delta_sol": f"{Decimal(abs(delta)) / LAMPORTS_PER_SOL:.9f}",
-                        "match_target": (
-                            "OUI"
-                            if target_lamports is not None and abs(delta) == target_lamports
-                            else ""
+                        "account": owner or token_account_address,
+                        "asset": asset,
+                        "mint": mint,
+                        "balance_before": _format_decimal(before),
+                        "balance_after": _format_decimal(after),
+                        "delta_amount": (
+                            ("+" if delta > 0 else "") + _format_decimal(delta)
                         ),
+                        "absolute_delta_amount": _format_decimal(abs(delta)),
+                        "match_target": "OUI" if target_matches(asset, mint, delta) else "",
                         "explorer": f"https://explorer.solana.com/tx/{signature}",
                         "solscan": f"https://solscan.io/tx/{signature}",
                     }
                 )
 
-                if target_lamports is not None and abs(delta) == target_lamports:
-                    add_match(
-                        match_type="balance_delta",
-                        block_slot=block_slot,
-                        block_time=block_time,
-                        signature=signature,
-                        amount_lamports=delta,
-                        account=address,
-                        detail=f"variation de solde {delta:+d} lamports",
+                if owner and owner in signer_addresses:
+                    owner_asset_deltas[(owner, asset, mint)] += delta
+
+            # Un même signataire qui perd un actif et en reçoit un autre est
+            # présenté comme un échange probable. Cette heuristique ne dépend
+            # d'aucun DEX particulier et n'ajoute aucun appel réseau.
+            deltas_by_owner: dict[str, list[tuple[str, str, Decimal]]] = defaultdict(list)
+            for (owner, asset, mint), delta in owner_asset_deltas.items():
+                if delta:
+                    deltas_by_owner[owner].append((asset, mint, delta))
+
+            for owner, legs in deltas_by_owner.items():
+                negatives = [leg for leg in legs if leg[2] < 0]
+                positives = [leg for leg in legs if leg[2] > 0]
+
+                distinct_assets = {(asset, mint) for asset, mint, _ in legs}
+                if not negatives or not positives or len(distinct_assets) < 2:
+                    continue
+
+                sent_parts = [
+                    f"{_format_decimal(abs(delta))} {asset}"
+                    for asset, _mint, delta in sorted(
+                        negatives,
+                        key=lambda item: abs(item[2]),
+                        reverse=True,
+                    )
+                ]
+                received_parts = [
+                    f"{_format_decimal(delta)} {asset}"
+                    for asset, _mint, delta in sorted(
+                        positives,
+                        key=lambda item: abs(item[2]),
+                        reverse=True,
+                    )
+                ]
+
+                operation_legs: list[dict[str, str]] = []
+                for asset, mint, delta in negatives:
+                    operation_legs.append(
+                        {
+                            "direction": "sent",
+                            "asset": asset,
+                            "mint": mint,
+                            "amount": _format_decimal(abs(delta)),
+                        }
+                    )
+                for asset, mint, delta in positives:
+                    operation_legs.append(
+                        {
+                            "direction": "received",
+                            "asset": asset,
+                            "mint": mint,
+                            "amount": _format_decimal(delta),
+                        }
                     )
 
+                append_operation(
+                    operation_type="swap_probable",
+                    block_slot=block_slot,
+                    block_time=block_time,
+                    signature=signature,
+                    sent=" + ".join(sent_parts),
+                    received=" + ".join(received_parts),
+                    account=owner,
+                    evidence="Variations nettes de plusieurs actifs",
+                    detail="Échange déduit des soldes avant/après",
+                    legs=operation_legs,
+                )
+
+            # Instructions principales : transferts directs utilisateur.
             for instruction_index, instruction in enumerate(message.get("instructions", [])):
+                location = f"outer:{instruction_index}"
                 extract_sol_instruction(
                     instruction,
                     block_slot,
                     block_time,
                     signature,
-                    f"outer:{instruction_index}",
+                    location,
+                )
+                extract_token_instruction(
+                    instruction,
+                    block_slot,
+                    block_time,
+                    signature,
+                    location,
+                    token_accounts,
                 )
 
+            # Inner instructions : conservées uniquement pour la vue technique
+            # des transferts SOL, sans créer d'opération utilisateur supplémentaire.
             for group in meta.get("innerInstructions", []) or []:
                 parent_index = group.get("index", "")
                 for inner_index, instruction in enumerate(group.get("instructions", [])):
@@ -475,39 +820,152 @@ def search_solana_window(
     if progress_callback:
         progress_callback(total_candidates, total_candidates, query_end_slot)
 
-    # Enrichit la vue Transactions avec les transferts SOL explicites détectés.
-    # Une transaction peut contenir plusieurs transferts : on conserve donc la liste.
-    transfers_by_signature: dict[str, list[dict[str, Any]]] = {}
-    for transfer in transfers_rows:
-        transfers_by_signature.setdefault(transfer["signature"], []).append(transfer)
+    # Déduplication des opérations.
+    unique_operations: list[dict[str, Any]] = []
+    seen_operations: set[tuple[Any, ...]] = set()
 
-    for transaction_row in transactions_rows:
-        tx_transfers = transfers_by_signature.get(transaction_row["signature"], [])
-        transaction_row["transfer_count"] = len(tx_transfers)
-        transaction_row["transfer_amounts_sol"] = " | ".join(
-            f"{transfer['sol']} SOL" for transfer in tx_transfers
-        )
-        transaction_row["transfer_parties"] = " | ".join(
-            f"{transfer.get('source', '')} → {transfer.get('destination', '')}"
-            for transfer in tx_transfers
-            if transfer.get("source") or transfer.get("destination")
-        )
-
-    unique_matches = []
-    seen_matches = set()
-    for row in matches_rows:
+    for row in operations_rows:
         key = (
-            row["match_type"],
+            row["operation_type"],
             row["signature"],
+            row["sent"],
+            row["received"],
             row["source"],
             row["destination"],
             row["account"],
-            row["amount_lamports"],
-            row["detail"],
         )
-        if key not in seen_matches:
-            seen_matches.add(key)
-            unique_matches.append(row)
+        if key in seen_operations:
+            continue
+        seen_operations.add(key)
+        unique_operations.append(row)
+
+    operations_rows = unique_operations
+
+    # Résumé lisible dans l'onglet Transactions.
+    operations_by_signature: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for operation in operations_rows:
+        operations_by_signature[operation["signature"]].append(operation)
+
+    for transaction_row in transactions_rows:
+        tx_operations = operations_by_signature.get(transaction_row["signature"], [])
+        summaries: list[str] = []
+
+        for operation in tx_operations:
+            if operation["operation_type"] == "swap_probable":
+                summary = f"Swap probable : {operation['sent']} → {operation['received']}"
+            else:
+                summary = operation["sent"] or operation["received"] or "Opération"
+            if summary not in summaries:
+                summaries.append(summary)
+
+        transaction_row["operation_count"] = len(tx_operations)
+        transaction_row["operation_summary"] = " | ".join(summaries)
+
+    # Correspondances exactes : on cherche le montant sur toutes les jambes
+    # d'une opération, puis on conserve les variations de solde comme filet de sécurité.
+    matches_rows: list[dict[str, Any]] = []
+    matched_signature_asset_amount: set[tuple[str, str, str]] = set()
+
+    if target_amount is not None:
+        for operation in operations_rows:
+            for leg in operation.get("legs", []):
+                try:
+                    leg_amount = Decimal(str(leg.get("amount", "0")))
+                except InvalidOperation:
+                    continue
+
+                asset = str(leg.get("asset") or "")
+                mint = str(leg.get("mint") or "")
+                if not target_matches(asset, mint, leg_amount):
+                    continue
+
+                direction = str(leg.get("direction") or "")
+                role = {
+                    "sent": "Montant envoyé",
+                    "received": "Montant reçu",
+                    "transfer": "Montant transféré",
+                }.get(direction, "Montant correspondant")
+
+                amount_text = _format_decimal(abs(leg_amount))
+                matches_rows.append(
+                    {
+                        "match_type": operation["operation_type"],
+                        "match_role": role,
+                        "block": operation["block"],
+                        "block_time_utc": operation["block_time_utc"],
+                        "signature": operation["signature"],
+                        "matched_amount": amount_text,
+                        "matched_asset": asset,
+                        "sent": operation["sent"],
+                        "received": operation["received"],
+                        "source": operation["source"],
+                        "destination": operation["destination"],
+                        "account": operation["account"],
+                        "detail": operation["detail"],
+                        "explorer": operation["explorer"],
+                        "solscan": operation["solscan"],
+                    }
+                )
+                matched_signature_asset_amount.add(
+                    (operation["signature"], asset, amount_text)
+                )
+
+        for movement in movements_rows:
+            try:
+                movement_amount = Decimal(str(movement["absolute_delta_amount"]))
+            except InvalidOperation:
+                continue
+
+            asset = str(movement.get("asset") or "")
+            mint = str(movement.get("mint") or "")
+            if not target_matches(asset, mint, movement_amount):
+                continue
+
+            amount_text = _format_decimal(abs(movement_amount))
+            dedupe_key = (movement["signature"], asset, amount_text)
+            if dedupe_key in matched_signature_asset_amount:
+                continue
+
+            matches_rows.append(
+                {
+                    "match_type": "balance_delta",
+                    "match_role": "Variation de solde",
+                    "block": movement["block"],
+                    "block_time_utc": movement["block_time_utc"],
+                    "signature": movement["signature"],
+                    "matched_amount": amount_text,
+                    "matched_asset": asset,
+                    "sent": "",
+                    "received": "",
+                    "source": "",
+                    "destination": "",
+                    "account": movement["account"],
+                    "detail": f"Variation de solde {movement['delta_amount']} {asset}",
+                    "explorer": movement["explorer"],
+                    "solscan": movement["solscan"],
+                }
+            )
+            matched_signature_asset_amount.add(dedupe_key)
+
+    # Déduplication finale des correspondances.
+    unique_matches: list[dict[str, Any]] = []
+    seen_matches: set[tuple[Any, ...]] = set()
+
+    for row in matches_rows:
+        key = (
+            row["match_type"],
+            row["match_role"],
+            row["signature"],
+            row["matched_amount"],
+            row["matched_asset"],
+            row["source"],
+            row["destination"],
+            row["account"],
+        )
+        if key in seen_matches:
+            continue
+        seen_matches.add(key)
+        unique_matches.append(row)
 
     _notify(status_callback, "Recherche terminée.")
 
@@ -517,7 +975,11 @@ def search_solana_window(
         "start_dt": start_dt,
         "end_dt": end_dt,
         "tolerance_seconds": tolerance_seconds,
-        "target_sol": target_sol,
+        "target_amount": target_amount,
+        "target_asset": target_asset,
+        "target_mint": target_mint,
+        # Compatibilité avec les premières versions de l'interface.
+        "target_sol": target_amount if target_asset == "SOL" else None,
         "target_lamports": target_lamports,
         "start_slot": start_slot,
         "start_slot_time": start_slot_time,
@@ -530,6 +992,7 @@ def search_solana_window(
         "skipped_blocks": skipped_blocks,
         "transactions": transactions_rows,
         "transfers": transfers_rows,
+        "operations": operations_rows,
         "movements": movements_rows,
         "matches": unique_matches,
     }
