@@ -101,8 +101,8 @@ st.markdown(
         }
         .st-key-network_selector {
             width: 100%;
-            max-width: 340px;
-            margin-bottom: 1.15rem;
+            max-width: 520px;
+            margin-bottom: 1.2rem;
         }
 
         @media (max-width: 768px) {
@@ -181,14 +181,22 @@ def apply_network_theme(network: str) -> None:
             .st-key-network_selector button {{
                 flex: 1 1 0;
                 min-width: 0 !important;
-                min-height: 2.15rem !important;
-                padding: 0.35rem 0.55rem !important;
+                min-height: 2.7rem !important;
+                padding: 0.48rem 0.9rem !important;
                 border: 1px solid rgba(128, 128, 128, 0.22) !important;
                 border-radius: 999px !important;
                 background: transparent !important;
                 box-shadow: none !important;
-                font-size: 0.78rem !important;
+                font-size: 0.92rem !important;
                 font-weight: 650 !important;
+                white-space: nowrap !important;
+            }}
+            .st-key-network_selector button span,
+            .st-key-network_selector button p {{
+                max-width: none !important;
+                overflow: visible !important;
+                text-overflow: clip !important;
+                white-space: nowrap !important;
             }}
             .st-key-network_selector button:hover {{
                 border-color: var(--chain-accent) !important;
@@ -659,9 +667,9 @@ network = st.segmented_control(
     "Réseau blockchain",
     network_options,
     default="Solana",
-    format_func=lambda value: NETWORK_THEMES[value]["symbol"],
     key="network_selector",
     label_visibility="collapsed",
+    width="stretch",
 )
 if network is None:
     network = "Solana"
