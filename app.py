@@ -54,26 +54,33 @@ st.markdown(
             color: rgba(49, 51, 63, 0.86);
         }
 
-        /* Navigation des vues : vrais boutons texte, sans pastille radio.
-           Seul l'onglet actif reçoit un soulignement rouge. */
-        .st-key-result_tabs_nav [data-testid="stHorizontalBlock"] {
-            gap: 0.15rem !important;
+        /* Navigation des vues : compacte, sans fond ni pastille.
+           Le soulignement de l'onglet actif est injecté dynamiquement. */
+        .st-key-result_tabs_nav {
+            margin-top: -0.15rem;
+            margin-bottom: 0.1rem;
+        }
+        .st-key-result_tabs_nav [data-testid="stButton"] {
+            width: auto !important;
+            flex: 0 0 auto !important;
         }
         .st-key-result_tabs_nav [data-testid="stButton"] > button {
+            width: auto !important;
             border: 0 !important;
             border-radius: 0 !important;
             border-bottom: 2px solid transparent !important;
             background: transparent !important;
             box-shadow: none !important;
-            padding: 0.38rem 0.78rem 0.48rem 0.78rem !important;
+            color: inherit !important;
+            padding: 0.32rem 0.58rem 0.42rem 0.58rem !important;
             min-height: auto !important;
         }
-        .st-key-result_tabs_nav [data-testid="stButton"] > button:hover {
+        .st-key-result_tabs_nav [data-testid="stButton"] > button:hover,
+        .st-key-result_tabs_nav [data-testid="stButton"] > button:focus,
+        .st-key-result_tabs_nav [data-testid="stButton"] > button:active {
             background: transparent !important;
-        }
-        .st-key-result_tabs_nav [data-testid="stButton"] > button[kind="primary"],
-        .st-key-result_tabs_nav [data-testid="stBaseButton-primary"] {
-            border-bottom-color: #ff4b4b !important;
+            color: inherit !important;
+            box-shadow: none !important;
         }
         @media (prefers-color-scheme: dark) {
             .compact-filter-title {
@@ -662,21 +669,35 @@ if result:
     def select_result_view(selected_view: str) -> None:
         st.session_state["result_view"] = selected_view
 
-    with st.container(key="result_tabs_nav"):
-        tab_columns = st.columns([1.0, 1.15, 1.05, 1.55, 1.65])
-        for tab_column, option in zip(tab_columns, view_options):
-            with tab_column:
-                st.button(
-                    option,
-                    key=f"result_tab_{view_options.index(option)}",
-                    type=(
-                        "primary"
-                        if st.session_state["result_view"] == option
-                        else "secondary"
-                    ),
-                    on_click=select_result_view,
-                    args=(option,),
-                )
+    active_view_index = view_options.index(st.session_state["result_view"])
+    st.markdown(
+        f"""
+        <style>
+            .st-key-result_tab_{active_view_index} button {{
+                border-bottom-color: #ff4b4b !important;
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container(
+        key="result_tabs_nav",
+        horizontal=True,
+        wrap=False,
+        horizontal_alignment="left",
+        vertical_alignment="center",
+        gap="xsmall",
+    ):
+        for index, option in enumerate(view_options):
+            st.button(
+                option,
+                key=f"result_tab_{index}",
+                type="secondary",
+                width="content",
+                on_click=select_result_view,
+                args=(option,),
+            )
 
     view = st.session_state["result_view"]
 
