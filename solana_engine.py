@@ -21,6 +21,12 @@ KNOWN_TOKEN_MINTS = {
     "PYUSD": "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
     "USDG": "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH",
 }
+KNOWN_TOKEN_DECIMALS = {
+    "USDC": 6,
+    "USDT": 6,
+    "PYUSD": 6,
+    "USDG": 6,
+}
 WSOL_MINT = "So11111111111111111111111111111111111111112"
 MINT_TO_SYMBOL = {mint: symbol for symbol, mint in KNOWN_TOKEN_MINTS.items()}
 MINT_TO_SYMBOL[WSOL_MINT] = "WSOL"
@@ -79,6 +85,70 @@ def _asset_label(mint: str) -> str:
     return mint
 
 
+def _base58_decode(value: str) -> bytes:
+    """Décode une chaîne base58 sans dépendance externe."""
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    index = {char: position for position, char in enumerate(alphabet)}
+
+    number = 0
+    for char in value:
+        if char not in index:
+            raise ValueError("Donnée non base58")
+        number = number * 58 + index[char]
+
+    decoded = (
+        number.to_bytes((number.bit_length() + 7) // 8, "big")
+        if number
+        else b""
+    )
+    leading_zeroes = len(value) - len(value.lstrip("1"))
+    return b"\x00" * leading_zeroes + decoded
+
+
+def _target_raw_units(asset: str, amount: Decimal | None) -> int | None:
+    if amount is None:
+        return None
+
+    if asset == "SOL":
+        raw = amount * LAMPORTS_PER_SOL
+    else:
+        decimals = KNOWN_TOKEN_DECIMALS.get(asset)
+        if decimals is None:
+            return None
+        raw = amount * (Decimal(10) ** decimals)
+
+    if raw != raw.to_integral_value():
+        return None
+
+    return int(raw)
+
+
+def _raw_instruction_contains_amount(data: Any, raw_amount: int | None) -> bool:
+    """
+    Cherche un montant u64 little-endian dans les données brutes d'une
+    instruction. Les programmes Solana encodent très souvent les montants
+    d'entrée/sortie de cette façon (Borsh/Anchor).
+    """
+    if raw_amount is None or raw_amount < 0 or raw_amount > 0xFFFFFFFFFFFFFFFF:
+        return False
+
+    if isinstance(data, (list, tuple)) and data:
+        encoded = data[0]
+    else:
+        encoded = data
+
+    if not isinstance(encoded, str) or not encoded:
+        return False
+
+    try:
+        decoded = _base58_decode(encoded)
+    except ValueError:
+        return False
+
+    needle = int(raw_amount).to_bytes(8, "little", signed=False)
+    return needle in decoded
+
+
 def _token_balance_amount(entry: dict[str, Any] | None) -> tuple[Decimal, int]:
     if not entry:
         return Decimal(0), 0
@@ -126,6 +196,8 @@ def search_solana_window(
     target_lamports: int | None = None
     if target_asset == "SOL" and target_amount is not None:
         target_lamports = int(target_amount * LAMPORTS_PER_SOL)
+
+    target_raw_units = _target_raw_units(target_asset, target_amount)
 
     center_dt = datetime.combine(search_date, search_time).replace(tzinfo=timezone.utc)
     start_dt = center_dt - timedelta(seconds=tolerance_seconds)
@@ -287,6 +359,7 @@ def search_solana_window(
     movements_rows: list[dict[str, Any]] = []
     operations_rows: list[dict[str, Any]] = []
     transfer_evidence_rows: list[dict[str, Any]] = []
+    raw_amount_evidence_rows: list[dict[str, Any]] = []
 
     analyzed_blocks = 0
     skipped_blocks = 0
@@ -323,6 +396,56 @@ def search_solana_window(
                 "explorer": f"https://explorer.solana.com/tx/{signature}",
                 "solscan": f"https://solscan.io/tx/{signature}",
             }
+        )
+
+    def append_raw_amount_evidence(
+        *,
+        block_slot: int,
+        block_time: str,
+        signature: str,
+        location: str,
+        program_id: str,
+    ) -> None:
+        raw_amount_evidence_rows.append(
+            {
+                "block": block_slot,
+                "block_time_utc": block_time,
+                "signature": signature,
+                "location": location,
+                "program_id": program_id,
+                "explorer": f"https://explorer.solana.com/tx/{signature}",
+                "solscan": f"https://solscan.io/tx/{signature}",
+            }
+        )
+
+    def inspect_raw_instruction_amount(
+        instruction: Any,
+        *,
+        block_slot: int,
+        block_time: str,
+        signature: str,
+        location: str,
+    ) -> None:
+        if target_raw_units is None or not isinstance(instruction, dict):
+            return
+
+        data = instruction.get("data")
+        if not _raw_instruction_contains_amount(data, target_raw_units):
+            return
+
+        program_id = str(
+            instruction.get("programId")
+            or instruction.get("program_id")
+            or instruction.get("program")
+            or ""
+        )
+
+        append_raw_amount_evidence(
+            block_slot=block_slot,
+            block_time=block_time,
+            signature=signature,
+            location=location,
+            program_id=program_id,
         )
 
     def append_transfer_evidence(
@@ -847,6 +970,13 @@ def search_solana_window(
             # Instructions principales : transferts directs utilisateur.
             for instruction_index, instruction in enumerate(message.get("instructions", [])):
                 location = f"outer:{instruction_index}"
+                inspect_raw_instruction_amount(
+                    instruction,
+                    block_slot=block_slot,
+                    block_time=block_time,
+                    signature=signature,
+                    location=location,
+                )
                 extract_sol_instruction(
                     instruction,
                     block_slot,
@@ -870,6 +1000,13 @@ def search_solana_window(
                 parent_index = group.get("index", "")
                 for inner_index, instruction in enumerate(group.get("instructions", [])):
                     location = f"inner:{parent_index}:{inner_index}"
+                    inspect_raw_instruction_amount(
+                        instruction,
+                        block_slot=block_slot,
+                        block_time=block_time,
+                        signature=signature,
+                        location=location,
+                    )
                     extract_sol_instruction(
                         instruction,
                         block_slot,
@@ -1047,6 +1184,64 @@ def search_solana_window(
                     "detail": (
                         "Correspondance exacte dans une instruction interne "
                         f"du swap ({evidence['location']})"
+                    ),
+                    "explorer": evidence["explorer"],
+                    "solscan": evidence["solscan"],
+                }
+            )
+            matched_signature_asset_amount.add(dedupe_key)
+
+        # Certains DEX/agrégateurs encodent le montant demandé directement
+        # dans les données brutes de l'instruction du swap. Il peut alors ne
+        # correspondre ni à un transfert parsé ni au delta net final.
+        for evidence in raw_amount_evidence_rows:
+            swap_operations = [
+                operation
+                for operation in operations_by_signature.get(
+                    evidence["signature"], []
+                )
+                if operation["operation_type"] == "swap_probable"
+            ]
+            if not swap_operations:
+                continue
+
+            amount_text = _format_decimal(target_amount)
+            identity_asset = (
+                "SOL"
+                if target_asset in {"SOL", "WSOL"}
+                else (target_mint or target_asset)
+            )
+            dedupe_key = (
+                evidence["signature"],
+                identity_asset,
+                amount_text,
+            )
+            if dedupe_key in matched_signature_asset_amount:
+                continue
+
+            swap = swap_operations[0]
+            matches_rows.append(
+                {
+                    "match_type": "swap_probable",
+                    "match_role": "Montant exact encodé dans le swap",
+                    "block": evidence["block"],
+                    "block_time_utc": evidence["block_time_utc"],
+                    "signature": evidence["signature"],
+                    "matched_amount": amount_text,
+                    "matched_asset": target_asset,
+                    "sent": swap["sent"],
+                    "received": swap["received"],
+                    "source": "",
+                    "destination": "",
+                    "account": swap["account"],
+                    "detail": (
+                        "Montant communiqué trouvé tel quel dans les données "
+                        f"brutes de l'instruction {evidence['location']}"
+                        + (
+                            f" · programme {evidence['program_id']}"
+                            if evidence["program_id"]
+                            else ""
+                        )
                     ),
                     "explorer": evidence["explorer"],
                     "solscan": evidence["solscan"],
