@@ -9,6 +9,8 @@ from datetime import date, datetime, time as dt_time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
+from amount_matching import AmountCriterion, parse_amount_criterion
+
 DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com"
 DEFAULT_RPC_DELAY = 0.15
 BOUNDARY_SLOT_MARGIN = 10
@@ -191,7 +193,20 @@ def search_solana_window(
 
     target_asset = str(asset_symbol or "SOL").strip().upper()
     target_mint = KNOWN_TOKEN_MINTS.get(target_asset, "")
-    target_amount = _parse_amount(amount_sol, target_asset)
+    target_max_decimals = (
+        9
+        if target_asset == "SOL"
+        else KNOWN_TOKEN_DECIMALS.get(target_asset, 9)
+    )
+    target_criterion: AmountCriterion | None = parse_amount_criterion(
+        amount_sol,
+        max_decimals=target_max_decimals,
+    )
+    target_amount = (
+        target_criterion.amount
+        if target_criterion is not None
+        else None
+    )
 
     target_lamports: int | None = None
     if target_asset == "SOL" and target_amount is not None:
@@ -321,20 +336,34 @@ def search_solana_window(
 
         return best_slot, best_time
 
-    def target_matches(asset: str, mint: str, amount: Decimal) -> bool:
-        if target_amount is None:
-            return False
-
-        if abs(amount) != target_amount:
-            return False
+    def target_match_quality(
+        asset: str,
+        mint: str,
+        amount: Decimal,
+    ) -> str | None:
+        if target_criterion is None:
+            return None
 
         if target_asset == "SOL":
-            return asset in {"SOL", "WSOL"} or mint == WSOL_MINT
+            if not (asset in {"SOL", "WSOL"} or mint == WSOL_MINT):
+                return None
+        elif target_mint:
+            if mint != target_mint:
+                return None
+        elif asset.upper() != target_asset:
+            return None
 
-        if target_mint:
-            return mint == target_mint
+        return target_criterion.classify(amount)
 
-        return asset.upper() == target_asset
+    def target_matches(asset: str, mint: str, amount: Decimal) -> bool:
+        return target_match_quality(asset, mint, amount) is not None
+
+    def target_match_marker(asset: str, mint: str, amount: Decimal) -> str:
+        quality = target_match_quality(asset, mint, amount)
+        return {
+            "exact": "EXACT",
+            "approximate": "APPROX",
+        }.get(quality, "")
 
     _notify(status_callback, "Recherche de la borne de début…")
     start_slot, start_slot_time = find_nearest_slot_for_timestamp(start_ts)
@@ -541,7 +570,7 @@ def search_solana_window(
                 "destination": destination,
                 "lamports": lamports,
                 "sol": amount_text,
-                "match_target": "OUI" if target_matches("SOL", "", amount) else "",
+                "match_target": target_match_marker("SOL", "", amount),
                 "explorer": f"https://explorer.solana.com/tx/{signature}",
                 "solscan": f"https://solscan.io/tx/{signature}",
             }
@@ -797,7 +826,7 @@ def search_solana_window(
                             ("+" if delta > 0 else "") + _format_decimal(delta)
                         ),
                         "absolute_delta_amount": _format_decimal(abs(delta)),
-                        "match_target": "OUI" if target_matches("SOL", "", delta) else "",
+                        "match_target": target_match_marker("SOL", "", delta),
                         "explorer": f"https://explorer.solana.com/tx/{signature}",
                         "solscan": f"https://solscan.io/tx/{signature}",
                     }
@@ -886,7 +915,7 @@ def search_solana_window(
                             ("+" if delta > 0 else "") + _format_decimal(delta)
                         ),
                         "absolute_delta_amount": _format_decimal(abs(delta)),
-                        "match_target": "OUI" if target_matches(asset, mint, delta) else "",
+                        "match_target": target_match_marker(asset, mint, delta),
                         "explorer": f"https://explorer.solana.com/tx/{signature}",
                         "solscan": f"https://solscan.io/tx/{signature}",
                     }
@@ -1067,8 +1096,9 @@ def search_solana_window(
         transaction_row["operation_count"] = len(tx_operations)
         transaction_row["operation_summary"] = " | ".join(summaries)
 
-    # Correspondances exactes : on cherche le montant sur toutes les jambes
-    # d'une opération, puis on conserve les variations de solde comme filet de sécurité.
+    # Correspondances exactes ou approchées : on cherche le montant sur toutes
+    # les jambes d'une opération, puis on conserve les variations de solde
+    # comme filet de sécurité.
     matches_rows: list[dict[str, Any]] = []
     matched_signature_asset_amount: set[tuple[str, str, str]] = set()
 
@@ -1082,7 +1112,8 @@ def search_solana_window(
 
                 asset = str(leg.get("asset") or "")
                 mint = str(leg.get("mint") or "")
-                if not target_matches(asset, mint, leg_amount):
+                match_quality = target_match_quality(asset, mint, leg_amount)
+                if match_quality is None:
                     continue
 
                 direction = str(leg.get("direction") or "")
@@ -1097,6 +1128,7 @@ def search_solana_window(
                     {
                         "match_type": operation["operation_type"],
                         "match_role": role,
+                        "match_quality": match_quality,
                         "block": operation["block"],
                         "block_time_utc": operation["block_time_utc"],
                         "signature": operation["signature"],
@@ -1134,7 +1166,8 @@ def search_solana_window(
 
             asset = str(evidence.get("asset") or "")
             mint = str(evidence.get("mint") or "")
-            if not target_matches(asset, mint, evidence_amount):
+            match_quality = target_match_quality(asset, mint, evidence_amount)
+            if match_quality is None:
                 continue
 
             amount_text = _format_decimal(abs(evidence_amount))
@@ -1166,7 +1199,12 @@ def search_solana_window(
             matches_rows.append(
                 {
                     "match_type": "swap_probable",
-                    "match_role": "Montant exact observé dans le swap",
+                    "match_role": (
+                        "Montant exact observé dans le swap"
+                        if match_quality == "exact"
+                        else "Montant approché observé dans le swap"
+                    ),
+                    "match_quality": match_quality,
                     "block": evidence["block"],
                     "block_time_utc": evidence["block_time_utc"],
                     "signature": evidence["signature"],
@@ -1182,8 +1220,13 @@ def search_solana_window(
                     "destination": evidence["destination"],
                     "account": swap["account"],
                     "detail": (
-                        "Correspondance exacte dans une instruction interne "
-                        f"du swap ({evidence['location']})"
+                        (
+                            "Correspondance exacte"
+                            if match_quality == "exact"
+                            else "Correspondance approchée"
+                        )
+                        + " dans une instruction interne du swap "
+                        + f"({evidence['location']})"
                     ),
                     "explorer": evidence["explorer"],
                     "solscan": evidence["solscan"],
@@ -1224,6 +1267,7 @@ def search_solana_window(
                 {
                     "match_type": "swap_probable",
                     "match_role": "Montant exact encodé dans le swap",
+                    "match_quality": "exact",
                     "block": evidence["block"],
                     "block_time_utc": evidence["block_time_utc"],
                     "signature": evidence["signature"],
@@ -1257,7 +1301,8 @@ def search_solana_window(
 
             asset = str(movement.get("asset") or "")
             mint = str(movement.get("mint") or "")
-            if not target_matches(asset, mint, movement_amount):
+            match_quality = target_match_quality(asset, mint, movement_amount)
+            if match_quality is None:
                 continue
 
             amount_text = _format_decimal(abs(movement_amount))
@@ -1277,7 +1322,12 @@ def search_solana_window(
             matches_rows.append(
                 {
                     "match_type": "balance_delta",
-                    "match_role": "Variation de solde",
+                    "match_role": (
+                        "Variation de solde exacte"
+                        if match_quality == "exact"
+                        else "Variation de solde approchée"
+                    ),
+                    "match_quality": match_quality,
                     "block": movement["block"],
                     "block_time_utc": movement["block_time_utc"],
                     "signature": movement["signature"],
@@ -1325,6 +1375,16 @@ def search_solana_window(
         "tolerance_seconds": tolerance_seconds,
         "target_amount": target_amount,
         "target_asset": target_asset,
+        "target_amount_precision": (
+            target_criterion.decimal_places
+            if target_criterion is not None
+            else None
+        ),
+        "target_amount_tolerance": (
+            target_criterion.tolerance
+            if target_criterion is not None
+            else None
+        ),
         "target_mint": target_mint,
         # Compatibilité avec les premières versions de l'interface.
         "target_sol": target_amount if target_asset == "SOL" else None,
