@@ -37,6 +37,15 @@ st.markdown(
             font-size: 0.82rem;
             color: #8a8f98;
         }
+        .table-footer-text {
+            color: #8a8f98;
+            font-size: 0.72rem;
+            line-height: 2.35rem;
+            white-space: nowrap;
+        }
+        .table-footer-right {
+            text-align: right;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -218,6 +227,9 @@ def show_table(rows: list[dict], *, table_kind: str, empty_message: str) -> None
     )
 
 
+PAGE_SIZE_OPTIONS = (100, 250, 500)
+
+
 def paginate_rows(
     rows: list[dict],
     *,
@@ -226,32 +238,145 @@ def paginate_rows(
     if not rows:
         return [], 1, 1, 100
 
-    controls_left, controls_right = st.columns([2, 1])
-    with controls_left:
-        page_size = st.selectbox(
-            "Lignes par page",
-            [100, 250, 500],
-            index=0,
-            key=f"{key_prefix}_page_size",
-        )
-
-    total_pages = max(1, (len(rows) + page_size - 1) // page_size)
-    page_options = list(range(1, total_pages + 1))
+    page_size_key = f"{key_prefix}_page_size"
     page_key = f"{key_prefix}_page"
 
-    if st.session_state.get(page_key) not in page_options:
-        st.session_state[page_key] = 1
+    if st.session_state.get(page_size_key) not in PAGE_SIZE_OPTIONS:
+        st.session_state[page_size_key] = PAGE_SIZE_OPTIONS[0]
 
-    with controls_right:
-        page = st.selectbox(
-            "Page",
-            page_options,
-            key=page_key,
-        )
+    page_size = int(st.session_state[page_size_key])
+    total_pages = max(1, (len(rows) + page_size - 1) // page_size)
+
+    try:
+        page = int(st.session_state.get(page_key, 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    page = max(1, min(page, total_pages))
+    st.session_state[page_key] = page
 
     start = (page - 1) * page_size
     end = min(start + page_size, len(rows))
     return rows[start:end], page, total_pages, page_size
+
+
+def pagination_items(page: int, total_pages: int) -> list[int | None]:
+    if total_pages <= 7:
+        return list(range(1, total_pages + 1))
+
+    if page <= 4:
+        return [1, 2, 3, 4, 5, None, total_pages]
+
+    if page >= total_pages - 3:
+        return [
+            1,
+            None,
+            total_pages - 4,
+            total_pages - 3,
+            total_pages - 2,
+            total_pages - 1,
+            total_pages,
+        ]
+
+    return [1, None, page - 1, page, page + 1, None, total_pages]
+
+
+def render_pagination_footer(
+    *,
+    total_rows: int,
+    page: int,
+    total_pages: int,
+    page_size: int,
+    key_prefix: str,
+) -> None:
+    if total_rows <= 0:
+        return
+
+    start_row = (page - 1) * page_size + 1
+    end_row = min(page * page_size, total_rows)
+    page_key = f"{key_prefix}_page"
+    page_size_key = f"{key_prefix}_page_size"
+
+    size_col, spacer_col, info_col, nav_col = st.columns(
+        [1.35, 4.65, 2.1, 3.3],
+        vertical_alignment="center",
+    )
+
+    with size_col:
+        label_col, select_col = st.columns(
+            [0.9, 1.15],
+            vertical_alignment="center",
+        )
+        with label_col:
+            st.markdown(
+                '<div class="table-footer-text">Afficher</div>',
+                unsafe_allow_html=True,
+            )
+        with select_col:
+            st.selectbox(
+                "Lignes par page",
+                PAGE_SIZE_OPTIONS,
+                key=page_size_key,
+                label_visibility="collapsed",
+            )
+
+    with spacer_col:
+        st.empty()
+
+    with info_col:
+        st.markdown(
+            (
+                '<div class="table-footer-text table-footer-right">'
+                f"{total_rows:,} résultats · {start_row:,}–{end_row:,}"
+                "</div>"
+            ).replace(",", " "),
+            unsafe_allow_html=True,
+        )
+
+    with nav_col:
+        items = pagination_items(page, total_pages)
+        nav_items: list[int | str | None] = ["prev", *items, "next"]
+        nav_columns = st.columns(
+            [0.75 if item is None else 1 for item in nav_items],
+            vertical_alignment="center",
+        )
+
+        for column, item in zip(nav_columns, nav_items):
+            with column:
+                if item == "prev":
+                    if st.button(
+                        "‹",
+                        key=f"{key_prefix}_page_prev",
+                        disabled=page <= 1,
+                        use_container_width=True,
+                    ):
+                        st.session_state[page_key] = page - 1
+                        st.rerun()
+                elif item == "next":
+                    if st.button(
+                        "›",
+                        key=f"{key_prefix}_page_next",
+                        disabled=page >= total_pages,
+                        use_container_width=True,
+                    ):
+                        st.session_state[page_key] = page + 1
+                        st.rerun()
+                elif item is None:
+                    st.markdown(
+                        '<div class="table-footer-text" '
+                        'style="text-align:center">…</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    target_page = int(item)
+                    if st.button(
+                        str(target_page),
+                        key=f"{key_prefix}_page_{target_page}",
+                        disabled=target_page == page,
+                        use_container_width=True,
+                    ):
+                        st.session_state[page_key] = target_page
+                        st.rerun()
 
 
 def render_downloads(
@@ -616,28 +741,23 @@ if result:
             only_success=only_success,
         )
 
-        st.caption(
-            f"{len(filtered_rows)} ligne(s) après filtre "
-            f"sur {len(source_rows)}."
-        )
-
         page_rows, page, total_pages, page_size = paginate_rows(
             filtered_rows,
             key_prefix=key_prefix,
         )
 
-        if filtered_rows:
-            start_row = (page - 1) * page_size + 1
-            end_row = min(page * page_size, len(filtered_rows))
-            st.caption(
-                f"Affichage {start_row}–{end_row} "
-                f"· page {page}/{total_pages}"
-            )
-
         show_table(
             page_rows,
             table_kind=table_kind,
             empty_message=empty_message,
+        )
+
+        render_pagination_footer(
+            total_rows=len(filtered_rows),
+            page=page,
+            total_pages=total_pages,
+            page_size=page_size,
+            key_prefix=key_prefix,
         )
 
         render_downloads(
