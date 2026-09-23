@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import deque
 from datetime import datetime, time, timezone
 
@@ -10,6 +11,7 @@ from bitcoin_engine import BitcoinSearchError, search_bitcoin_window
 from ethereum_engine import EthereumSearchError, search_ethereum_window
 from search_result_messages import no_matches_message, partial_search_warning
 from solana_engine import SolanaSearchError, search_solana_window
+from streamlit_errors import log_unexpected_search_error
 
 
 st.set_page_config(
@@ -895,7 +897,12 @@ if submitted:
                     state="error",
                     expanded=True,
                 )
-                st.exception(exc)
+                st.error(
+                    log_unexpected_search_error(
+                        logging.getLogger(__name__),
+                        exc,
+                    )
+                )
             else:
                 if submitted_amount and result.get("target_amount") is None:
                     raise RuntimeError(
