@@ -1,14 +1,18 @@
 import io
 import json
 import unittest
+import urllib.error
 from datetime import date, datetime, time, timezone
 from unittest.mock import patch
 
 from blockchain_lookup.engines.ethereum import (
+    EthereumSearchError,
     KNOWN_ERC20,
     TRANSFER_TOPIC,
     search_ethereum_window,
 )
+from blockchain_lookup.ui.messages import no_matches_message, partial_search_warning
+from blockchain_lookup.runtime.result_limits import ResultLimitExceeded
 
 
 SEARCH_DATE = date(2024, 1, 1)
@@ -47,12 +51,13 @@ class FakeEthereumRpc:
     """Minimal JSON-RPC fixture with ID-based, reversed batch replies."""
 
     def __init__(self, transactions=None, receipts=None, *, unavailable_blocks=None,
-                 unavailable_receipts=None, pruned_from=None):
+                 unavailable_receipts=None, pruned_from=None, latest_block=None):
         self.transactions = transactions or []
         self.receipts = receipts or {}
         self.unavailable_blocks = set(unavailable_blocks or ())
         self.unavailable_receipts = set(unavailable_receipts or ())
         self.pruned_from = pruned_from
+        self.latest_block = latest_block if latest_block is not None else CENTER_TS + 200
         self.batch_sizes = []
         self.methods = []
 
@@ -72,7 +77,7 @@ class FakeEthereumRpc:
         method = payload["method"]
         self.methods.append(method)
         if method == "eth_blockNumber":
-            response = {"id": payload["id"], "result": hex(CENTER_TS + 200)}
+            response = {"id": payload["id"], "result": hex(self.latest_block)}
         elif method == "eth_getBlockByNumber":
             block_number = int(payload["params"][0], 16)
             full = payload["params"][1]
@@ -125,6 +130,103 @@ def _search(rpc, amount=None, asset="ETH"):
 
 
 class EthereumEngineTests(unittest.TestCase):
+    def test_result_row_limit_interrupts_before_truncation(self):
+        rpc = FakeEthereumRpc([_transaction("too-many-eth-rows", value=10**18)])
+        with patch("blockchain_lookup.engines.ethereum.urllib.request.urlopen", side_effect=rpc), patch(
+            "blockchain_lookup.engines.ethereum.configured_max_result_rows", return_value=1
+        ):
+            with self.assertRaisesRegex(ResultLimitExceeded, "résultats seraient incomplets"):
+                search_ethereum_window(
+                    SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
+                )
+
+    def test_temporal_coverage_tracks_missing_start_and_end(self):
+        cases = (
+            (None, CENTER_TS + 200, False, False),
+            (CENTER_TS - 5, CENTER_TS + 200, True, False),
+            (None, CENTER_TS + 5, False, True),
+        )
+        for pruned_from, latest, expected_start, expected_end in cases:
+            with self.subTest(pruned_from=pruned_from, latest=latest):
+                rpc = FakeEthereumRpc(pruned_from=pruned_from, latest_block=latest)
+                with patch("blockchain_lookup.engines.ethereum.urllib.request.urlopen", side_effect=rpc):
+                    result = search_ethereum_window(
+                        SEARCH_DATE, SEARCH_TIME, tolerance_seconds=10, rpc_delay=0
+                    )
+                self.assertEqual(result["coverage_missing_before"], expected_start)
+                self.assertEqual(result["coverage_missing_after"], expected_end)
+                self.assertEqual(result["failed_blocks"], 0)
+                self.assertEqual(
+                    result["search_completeness"],
+                    "partial" if expected_start or expected_end else "complete",
+                )
+                self.assertEqual(
+                    result["manifest"]["temporal_coverage"]["missing_after"],
+                    expected_end,
+                )
+                if expected_start or expected_end:
+                    self.assertIn("couverture temporelle", partial_search_warning(result))
+                    self.assertIn("non couverte", no_matches_message(result))
+
+    def test_temporal_window_fully_outside_available_blocks_errors(self):
+        for pruned_from, latest, expected in (
+            (CENTER_TS + 1, CENTER_TS + 200, "historique archive"),
+            (None, CENTER_TS - 1, "postérieure"),
+        ):
+            with self.subTest(pruned_from=pruned_from, latest=latest):
+                rpc = FakeEthereumRpc(pruned_from=pruned_from, latest_block=latest)
+                with patch("blockchain_lookup.engines.ethereum.urllib.request.urlopen", side_effect=rpc):
+                    with self.assertRaisesRegex(EthereumSearchError, expected):
+                        search_ethereum_window(
+                            SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
+                        )
+
+    def test_missing_receipt_has_unknown_status_and_no_executed_amount(self):
+        tx = _transaction("eth-receipt-unknown", value=10**18)
+        result = _search(
+            FakeEthereumRpc([tx], unavailable_receipts=["eth-receipt-unknown"]),
+            "1", "ETH",
+        )
+        row = result["transactions"][0]
+        self.assertEqual(row["status"], "UNKNOWN")
+        self.assertEqual(row["error"], "Reçu Ethereum indisponible")
+        self.assertEqual(row["fee_eth"], "")
+        self.assertEqual(result["operations"], [])
+        self.assertEqual(result["matches"], [])
+        self.assertEqual(result["search_completeness"], "partial")
+
+    def test_receipt_rpc_http_failure_is_partial_and_unknown(self):
+        class FailingReceiptRpc(FakeEthereumRpc):
+            def __call__(self, request, timeout):
+                payload = json.loads(request.data)
+                if isinstance(payload, list) or payload["method"] == "eth_getTransactionReceipt":
+                    raise urllib.error.HTTPError(
+                        "https://example.invalid", 503, "Unavailable", {}, None
+                    )
+                return super().__call__(request, timeout)
+
+        rpc = FailingReceiptRpc([_transaction("eth-receipt-http-failed", value=10**18)])
+        with patch("blockchain_lookup.engines.ethereum.urllib.request.urlopen", side_effect=rpc):
+            result = search_ethereum_window(
+                SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0,
+                amount_eth="1", rpc_delay=0, retries=1,
+            )
+        self.assertEqual(result["transactions"][0]["status"], "UNKNOWN")
+        self.assertEqual(result["failed_blocks"], 1)
+        self.assertEqual(result["matches"], [])
+
+    def test_failed_receipt_does_not_turn_logs_into_operations(self):
+        tx = _transaction("eth-receipt-failed", value=10**18)
+        receipt = {
+            "status": "0x0",
+            "logs": [_transfer_log("USDC", USER, ROUTER, 1_000_000)],
+        }
+        result = _search(FakeEthereumRpc([tx], {"eth-receipt-failed": receipt}), "1", "ETH")
+        self.assertEqual(result["transactions"][0]["status"], "FAILED")
+        self.assertEqual(result["transactions"][0]["error"], "Exécution EVM échouée")
+        self.assertEqual(result["operations"], [])
+        self.assertEqual(result["matches"], [])
+
     def test_native_eth_transfer_exact(self):
         tx = _transaction("eth-native-1", value=1_500_000_000_000_000_000)
         result = _search(FakeEthereumRpc([tx]), "1.5")
@@ -192,8 +294,8 @@ class EthereumEngineTests(unittest.TestCase):
         result = _search(FakeEthereumRpc([tx], {"eth-weth-swap": receipt}), "1", "ETH")
 
         swap = next(row for row in result["operations"] if row["operation_type"] == "swap_probable")
-        self.assertEqual(swap["received"], "1 ETH")
-        self.assertTrue(any(row["matched_asset"] == "ETH" for row in result["matches"]))
+        self.assertEqual(swap["received"], "1 WETH")
+        self.assertTrue(any(row["matched_asset"] == "WETH" for row in result["matches"]))
 
     def test_calldata_amount_is_evidence_for_probable_swap(self):
         raw_usdt = 100_000_000
@@ -214,6 +316,7 @@ class EthereumEngineTests(unittest.TestCase):
         self.assertTrue(any(row["operation_type"] == "swap_probable" for row in result["operations"]))
         self.assertEqual(len(result["matches"]), 1)
         self.assertEqual(result["matches"][0]["matched_asset"], "USDT")
+        self.assertIn("Indice", result["matches"][0]["match_role"])
         self.assertIn("calldata", result["matches"][0]["detail"])
 
     def test_duplicate_transfer_logs_produce_one_operation_and_match(self):

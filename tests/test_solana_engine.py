@@ -9,10 +9,12 @@ from blockchain_lookup.ui.messages import no_matches_message, partial_search_war
 from blockchain_lookup.engines.solana import (
     MAX_CANDIDATE_SLOTS,
     KNOWN_TOKEN_MINTS,
+    WSOL_MINT,
     SolanaSearchError,
     _retry_after_seconds,
     search_solana_window,
 )
+from blockchain_lookup.runtime.result_limits import ResultLimitExceeded
 
 
 SEARCH_DATE = date(2024, 1, 1)
@@ -27,6 +29,8 @@ class FakeSolanaRpc:
         self.block_error = None
         self.missing_block_slots = set()
         self.transactions_by_slot = {}
+        self.first_slot = CENTER_TS - 2000
+        self.latest_slot = CENTER_TS + 2000
 
     def __call__(self, request, timeout):
         payload = json.loads(request.data)
@@ -41,9 +45,9 @@ class FakeSolanaRpc:
 
         params = payload["params"]
         if method == "getFirstAvailableBlock":
-            result = CENTER_TS - 2000
+            result = self.first_slot
         elif method == "getSlot":
-            result = CENTER_TS + 2000
+            result = self.latest_slot
         elif method == "getBlocks":
             result = list(range(params[0], params[1] + 1))
         elif method == "getBlockTime":
@@ -105,6 +109,92 @@ def _search_solana_transaction(tx, amount, asset="SOL"):
 
 
 class SolanaEngineTests(unittest.TestCase):
+    def test_result_row_limit_interrupts_before_truncation(self):
+        tx = _transaction(
+            "too-many-sol-rows", ["wallet", "recipient"],
+            {"preBalances": [2_000_000_000, 0],
+             "postBalances": [999_995_000, 1_000_000_000]},
+        )
+        rpc = FakeSolanaRpc()
+        rpc.transactions_by_slot[CENTER_TS] = [tx]
+        with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc), patch(
+            "blockchain_lookup.engines.solana.configured_max_result_rows", return_value=1
+        ):
+            with self.assertRaisesRegex(ResultLimitExceeded, "résultats seraient incomplets"):
+                search_solana_window(
+                    SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
+                )
+
+    def test_failed_transaction_keeps_status_but_never_matches_instruction(self):
+        tx = _transaction(
+            "failed-sol-transfer",
+            ["wallet", "recipient"],
+            {
+                "err": {"InstructionError": [0, "Custom"]},
+                "preBalances": [2_000_000_000, 0],
+                "postBalances": [999_995_000, 1_000_000_000],
+            },
+            instructions=[{
+                "program": "system",
+                "parsed": {"type": "transfer", "info": {
+                    "source": "wallet", "destination": "recipient", "lamports": 1_000_000_000,
+                }},
+            }],
+        )
+        result = _search_solana_transaction(tx, "1")
+
+        self.assertEqual(len(result["transactions"]), 1)
+        self.assertEqual(result["transactions"][0]["status"], "FAILED")
+        self.assertEqual(result["transactions"][0]["fee_lamports"], 5_000)
+        self.assertEqual(result["operations"], [])
+        self.assertEqual(result["movements"], [])
+        self.assertEqual(result["matches"], [])
+
+    def test_temporal_coverage_tracks_missing_start_and_end(self):
+        for first, latest, expected_start, expected_end in (
+            (CENTER_TS - 2000, CENTER_TS + 2000, False, False),
+            (CENTER_TS - 5, CENTER_TS + 2000, True, False),
+            (CENTER_TS - 2000, CENTER_TS + 5, False, True),
+        ):
+            with self.subTest(first=first, latest=latest):
+                rpc = FakeSolanaRpc()
+                rpc.first_slot = first
+                rpc.latest_slot = latest
+                with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc):
+                    result = search_solana_window(
+                        SEARCH_DATE, SEARCH_TIME, tolerance_seconds=10, rpc_delay=0
+                    )
+                self.assertEqual(result["coverage_missing_before"], expected_start)
+                self.assertEqual(result["coverage_missing_after"], expected_end)
+                self.assertEqual(result["failed_blocks"], 0)
+                self.assertEqual(
+                    result["search_completeness"],
+                    "partial" if expected_start or expected_end else "complete",
+                )
+                self.assertEqual(
+                    result["manifest"]["temporal_coverage"]["missing_before"],
+                    expected_start,
+                )
+                if expected_start or expected_end:
+                    self.assertIn("couverture temporelle", partial_search_warning(result))
+                    self.assertIn("non couverte", no_matches_message(result))
+
+    def test_temporal_window_fully_outside_available_slots_errors(self):
+        for first, latest, expected in (
+            (CENTER_TS + 1, CENTER_TS + 100, "historique archive"),
+            (CENTER_TS - 100, CENTER_TS - 1, "postérieure"),
+        ):
+            with self.subTest(first=first, latest=latest):
+                rpc = FakeSolanaRpc()
+                rpc.first_slot = first
+                rpc.latest_slot = latest
+                with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc):
+                    with self.assertRaisesRegex(SolanaSearchError, expected):
+                        search_solana_window(
+                            SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
+                        )
+                self.assertNotIn("getBlock", rpc.methods)
+
     def test_window_below_limit_fetches_blocks(self):
         rpc = FakeSolanaRpc()
         with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc):
@@ -440,7 +530,35 @@ class SolanaEngineTests(unittest.TestCase):
         self.assertEqual(len(result["matches"]), 1)
         self.assertEqual(result["matches"][0]["match_quality"], "exact")
         self.assertEqual(result["matches"][0]["matched_amount"], "2.5")
+        self.assertIn("Indice", result["matches"][0]["match_role"])
         self.assertIn("donn", result["matches"][0]["detail"])
+
+    def test_wsol_is_economically_sol_but_keeps_its_observed_label(self):
+        usdc_mint = KNOWN_TOKEN_MINTS["USDC"]
+        tx = _transaction(
+            "sol-wsol-swap", ["wallet", "wallet-wsol", "wallet-usdc"],
+            {
+                "preBalances": [5_000_000_000, 2_039_280, 2_039_280],
+                "postBalances": [4_999_995_000, 2_039_280, 2_039_280],
+                "preTokenBalances": [
+                    {"accountIndex": 1, "mint": WSOL_MINT, "owner": "wallet",
+                     "uiTokenAmount": {"amount": "0", "decimals": 9}},
+                    {"accountIndex": 2, "mint": usdc_mint, "owner": "wallet",
+                     "uiTokenAmount": {"amount": "2000000", "decimals": 6}},
+                ],
+                "postTokenBalances": [
+                    {"accountIndex": 1, "mint": WSOL_MINT, "owner": "wallet",
+                     "uiTokenAmount": {"amount": "1000000000", "decimals": 9}},
+                    {"accountIndex": 2, "mint": usdc_mint, "owner": "wallet",
+                     "uiTokenAmount": {"amount": "0", "decimals": 6}},
+                ],
+            },
+        )
+        result = _search_solana_transaction(tx, "1", "SOL")
+        swap = next(row for row in result["operations"] if row["operation_type"] == "swap_probable")
+        self.assertEqual(swap["received"], "1 WSOL")
+        self.assertTrue(any(row["matched_asset"] == "WSOL" for row in result["matches"]))
+        self.assertTrue(any(row["asset"] == "WSOL" for row in result["movements"]))
 
 
 if __name__ == "__main__":

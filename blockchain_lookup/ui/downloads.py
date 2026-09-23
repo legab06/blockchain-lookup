@@ -1,10 +1,19 @@
 import pandas as pd
 import streamlit as st
 
+from blockchain_lookup.ui.tables import prepare_table_dataframe
 
-def to_csv_bytes(rows: list[dict]) -> bytes:
+
+def to_csv_bytes(
+    rows: list[dict], *, table_kind: str | None = None, network: str | None = None
+) -> bytes:
+    table = (
+        prepare_table_dataframe(rows, table_kind=table_kind, network=network)
+        if table_kind is not None and network is not None
+        else pd.DataFrame(rows)
+    )
     return (
-        pd.DataFrame(rows)
+        table
         .to_csv(index=False, sep=";", encoding="utf-8-sig")
         .encode("utf-8-sig")
     )
@@ -16,6 +25,8 @@ def render_downloads(
     *,
     filename: str,
     key_prefix: str,
+    table_kind: str,
+    network: str,
 ) -> None:
     if not page_rows:
         return
@@ -28,7 +39,7 @@ def render_downloads(
     with download_col:
         st.download_button(
             "Télécharger la page affichée CSV",
-            data=to_csv_bytes(page_rows),
+            data=to_csv_bytes(page_rows, table_kind=table_kind, network=network),
             file_name=filename,
             mime="text/csv",
             key=f"{key_prefix}_page_csv",
@@ -52,7 +63,7 @@ def render_downloads(
     if prepare_full:
         st.download_button(
             "Télécharger toutes les lignes filtrées CSV",
-            data=to_csv_bytes(filtered_rows),
+            data=to_csv_bytes(filtered_rows, table_kind=table_kind, network=network),
             file_name=filename.replace(".csv", "_complet.csv"),
             mime="text/csv",
             key=f"{key_prefix}_full_csv",

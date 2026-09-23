@@ -12,6 +12,7 @@ from blockchain_lookup.engines.bitcoin import (
     _select_candidate_blocks,
     search_bitcoin_window,
 )
+from blockchain_lookup.runtime.result_limits import ResultLimitExceeded
 
 
 SEARCH_DATE = date(2024, 1, 1)
@@ -68,6 +69,18 @@ class FakeBitcoinApi:
 
 
 class BitcoinEngineTests(unittest.TestCase):
+    def test_result_row_limit_interrupts_before_truncation(self):
+        raw_block = b"\x00" * 80 + b"\x01" + _legacy_transaction(100_000, None)
+        api = FakeBitcoinApi(raw_block)
+        with patch("blockchain_lookup.engines.bitcoin.urllib.request.urlopen", side_effect=api), patch(
+            "blockchain_lookup.engines.bitcoin.configured_max_result_rows", return_value=1
+        ):
+            with self.assertRaisesRegex(ResultLimitExceeded, "résultats seraient incomplets"):
+                search_bitcoin_window(
+                    SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0,
+                    api_url="https://example.invalid", api_delay=0,
+                )
+
     def test_p2pkh_destination(self):
         script = bytes.fromhex(
             "76a914"

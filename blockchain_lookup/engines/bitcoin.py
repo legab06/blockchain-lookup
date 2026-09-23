@@ -13,6 +13,7 @@ from blockchain_lookup.domain.amount_matching import AmountCriterion, parse_amou
 from blockchain_lookup.domain.models import SearchResult
 from blockchain_lookup.domain.result_ordering import sort_result_rows
 from blockchain_lookup.domain.search_manifest import build_search_manifest
+from blockchain_lookup.runtime.result_limits import ResultRowBudget, configured_max_result_rows
 
 DEFAULT_API_URL = "https://mempool.space/api"
 DEFAULT_API_DELAY = 0.03
@@ -806,18 +807,19 @@ def search_bitcoin_window(
             "Réduisez la tolérance."
         )
 
+    row_budget = ResultRowBudget(configured_max_result_rows())
     transactions_rows: list[
         dict[str, Any]
-    ] = []
+    ] = row_budget.rows()
     operations_rows: list[
         dict[str, Any]
-    ] = []
+    ] = row_budget.rows()
     movements_rows: list[
         dict[str, Any]
-    ] = []
+    ] = row_budget.rows()
     matches_rows: list[
         dict[str, Any]
-    ] = []
+    ] = row_budget.rows()
 
     total_candidates = len(
         candidate_meta

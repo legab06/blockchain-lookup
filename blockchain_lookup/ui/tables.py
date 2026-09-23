@@ -129,18 +129,7 @@ def localize_rows(rows: list[dict], network: str) -> list[dict]:
     return localized
 
 
-def show_table(
-    rows: list[dict],
-    *,
-    table_kind: str,
-    empty_message: str,
-    network: str,
-) -> None:
-    if not rows:
-        st.info(empty_message)
-        return
-
-    columns = TABLE_COLUMNS[table_kind]
+def _display_labels(network: str) -> dict[str, str]:
     labels = dict(DISPLAY_COLUMN_LABELS)
     if network == "Solana":
         labels["explorer"] = "Solana Explorer"
@@ -151,13 +140,24 @@ def show_table(
     elif network == "Bitcoin":
         labels["explorer"] = "mempool.space"
         labels["secondary_explorer"] = "Blockstream"
+    return labels
+
+
+def prepare_table_dataframe(
+    rows: list[dict],
+    *,
+    table_kind: str,
+    network: str,
+) -> pd.DataFrame:
+    columns = TABLE_COLUMNS[table_kind]
+    labels = _display_labels(network)
 
     table = pd.DataFrame(localize_rows(rows, network)).reindex(columns=columns)
     table = table.dropna(axis=1, how="all").rename(columns=labels)
 
     if "Statut" in table:
         table["Statut"] = table["Statut"].replace(
-            {"SUCCESS": "Réussie", "FAILED": "Échouée"}
+            {"SUCCESS": "Réussie", "FAILED": "Échouée", "UNKNOWN": "Statut inconnu"}
         )
 
     for column in (
@@ -170,6 +170,23 @@ def show_table(
     ):
         if column in table:
             table[column] = table[column].replace("", "—").fillna("—")
+
+    return table
+
+
+def show_table(
+    rows: list[dict],
+    *,
+    table_kind: str,
+    empty_message: str,
+    network: str,
+) -> None:
+    if not rows:
+        st.info(empty_message)
+        return
+
+    table = prepare_table_dataframe(rows, table_kind=table_kind, network=network)
+    labels = _display_labels(network)
 
     st.dataframe(
         table,
