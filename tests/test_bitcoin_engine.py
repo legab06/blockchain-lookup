@@ -1,12 +1,70 @@
 import hashlib
+import io
+import json
 import unittest
+from datetime import date, datetime, time, timezone
+from unittest.mock import patch
 
 from bitcoin_engine import (
     _decode_output_destination,
     _parse_block,
     _parse_transaction,
     _select_candidate_blocks,
+    search_bitcoin_window,
 )
+
+
+SEARCH_DATE = date(2024, 1, 1)
+SEARCH_TIME = time(0, 0)
+CENTER_TS = int(datetime.combine(SEARCH_DATE, SEARCH_TIME, timezone.utc).timestamp())
+
+
+def _legacy_transaction(value_sats, prev_hash):
+    script = bytes.fromhex("76a914" + "00" * 20 + "88ac")
+    coinbase = prev_hash is None
+    previous_output = (
+        b"\x00" * 32 + (0xFFFFFFFF).to_bytes(4, "little")
+        if coinbase
+        else prev_hash + (0).to_bytes(4, "little")
+    )
+    script_sig = b"\x01\x01" if coinbase else b"\x01\x51"
+    return (
+        (1).to_bytes(4, "little", signed=True)
+        + b"\x01"
+        + previous_output
+        + bytes([len(script_sig)])
+        + script_sig
+        + (0xFFFFFFFF).to_bytes(4, "little")
+        + b"\x01"
+        + value_sats.to_bytes(8, "little")
+        + bytes([len(script)])
+        + script
+        + (0).to_bytes(4, "little")
+    )
+
+
+class FakeBitcoinApi:
+    def __init__(self, raw_block):
+        self.raw_block = raw_block
+
+    def __call__(self, request, timeout):
+        path = request.full_url.split("example.invalid", 1)[1]
+        if path == "/blocks/tip/height":
+            payload = b"10"
+        elif path.startswith("/v1/mining/blocks/timestamp/"):
+            payload = b'{"height": 5}'
+        elif path.startswith("/blocks/"):
+            start = int(path.rsplit("/", 1)[1])
+            payload = json.dumps([
+                {"height": height, "id": f"hash{height}",
+                 "timestamp": CENTER_TS + (height - 5) * 600}
+                for height in range(start, max(-1, start - 10), -1)
+            ]).encode()
+        elif path == "/block/hash5/raw":
+            payload = self.raw_block
+        else:
+            raise AssertionError(path)
+        return io.BytesIO(payload)
 
 
 class BitcoinEngineTests(unittest.TestCase):
@@ -142,6 +200,44 @@ class BitcoinEngineTests(unittest.TestCase):
 
         self.assertTrue(fallback)
         self.assertEqual([block["height"] for block in selected], [101])
+
+    def test_search_uses_one_based_positions_and_newest_first_for_outputs(self):
+        raw_block = (
+            b"\x00" * 80
+            + b"\x02"
+            + _legacy_transaction(50_000, None)
+            + _legacy_transaction(100_000, b"\x11" * 32)
+        )
+        parsed = _parse_block(raw_block)
+        api = FakeBitcoinApi(raw_block)
+        with patch("bitcoin_engine.urllib.request.urlopen", side_effect=api):
+            result = search_bitcoin_window(
+                SEARCH_DATE,
+                SEARCH_TIME,
+                tolerance_seconds=0,
+                amount_btc="0.001",
+                api_url="https://example.invalid",
+                api_delay=0,
+            )
+
+        expected_signatures = [parsed[1]["txid"], parsed[0]["txid"]]
+        self.assertEqual([row["signature"] for row in result["transactions"]], expected_signatures)
+        self.assertEqual([row["transaction_index"] for row in result["transactions"]], [2, 1])
+        self.assertEqual([row["transaction_index"] for row in result["operations"]], [2, 1])
+        self.assertEqual(result["matches"][0]["transaction_index"], 2)
+
+        output = result["operations"][0]
+        self.assertEqual(output["operation_type"], "transfer")
+        self.assertEqual(output["source"], "")
+        self.assertEqual(output["destination"], "1111111111111111111114oLvT2")
+        self.assertIn("vout #0", output["evidence"])
+        self.assertIn("P2PKH", output["detail"])
+        self.assertIn("100000 satoshis", output["detail"])
+        self.assertEqual(result["manifest"]["network"], "Bitcoin")
+        self.assertEqual(result["manifest"]["blocks"]["analyzed_hashes"], [
+            {"number": 5, "hash": "hash5"}
+        ])
+        self.assertEqual(result["manifest"]["bitcoin_time_fallback"]["used"], False)
 
     def test_segwit_txid_excludes_witness(self):
         version = (2).to_bytes(

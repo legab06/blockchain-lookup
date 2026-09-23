@@ -11,6 +11,8 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
 from amount_matching import AmountCriterion, parse_amount_criterion
+from result_ordering import sort_result_rows
+from search_manifest import build_search_manifest
 
 DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com"
 DEFAULT_RPC_DELAY = 0.15
@@ -427,6 +429,7 @@ def search_solana_window(
 
     analyzed_blocks = 0
     skipped_blocks = 0
+    analyzed_hashes: list[dict[str, Any]] = []
     outside_window_blocks = 0
 
     def append_operation(
@@ -779,6 +782,8 @@ def search_solana_window(
             continue
 
         analyzed_blocks += 1
+        if block.get("blockhash"):
+            analyzed_hashes.append({"number": block_slot, "hash": str(block["blockhash"])})
         block_time = datetime.fromtimestamp(
             block_timestamp,
             tz=timezone.utc,
@@ -1404,9 +1409,22 @@ def search_solana_window(
         seen_matches.add(key)
         unique_matches.append(row)
 
+    transaction_indices = {
+        (int(row["block"]), str(row["signature"])): int(row["transaction_index"])
+        for row in transactions_rows
+    }
+    for rows in (
+        transactions_rows,
+        transfers_rows,
+        operations_rows,
+        movements_rows,
+        unique_matches,
+    ):
+        sort_result_rows(rows, transaction_indices)
+
     _notify(status_callback, "Recherche terminée.")
 
-    return {
+    result = {
         "network": "Solana",
         "center_dt": center_dt,
         "start_dt": start_dt,
@@ -1446,3 +1464,7 @@ def search_solana_window(
         "movements": movements_rows,
         "matches": unique_matches,
     }
+    result["manifest"] = build_search_manifest(
+        result, endpoint=rpc_url, amount_input=amount_sol, analyzed_hashes=analyzed_hashes
+    )
+    return result

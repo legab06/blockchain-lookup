@@ -12,21 +12,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class StreamlitHardeningTests(unittest.TestCase):
-    def test_streamlit_theme_is_valid_and_dark(self):
+    def test_streamlit_theme_is_valid_and_light(self):
         config_path = ROOT / ".streamlit" / "config.toml"
         config = tomllib.loads(config_path.read_text(encoding="utf-8"))
 
         self.assertFalse((ROOT / "config.toml").exists())
-        self.assertEqual(config["theme"]["base"], "dark")
+        self.assertEqual(config["theme"]["base"], "light")
         self.assertEqual(config["theme"]["primaryColor"], "#7C3AED")
-        self.assertEqual(config["theme"]["backgroundColor"], "#0E1117")
-        self.assertEqual(config["theme"]["secondaryBackgroundColor"], "#171B23")
-        self.assertEqual(config["theme"]["textColor"], "#FAFAFA")
-        self.assertEqual(config["theme"]["font"], "sans serif")
+        self.assertEqual(config["theme"]["backgroundColor"], "#FFFFFF")
+        self.assertEqual(
+            config["theme"]["secondaryBackgroundColor"],
+            "#F5F7FA",
+        )
+        self.assertEqual(config["theme"]["textColor"], "#1F2937")
+        self.assertEqual(config["theme"]["font"], "sans-serif")
 
     def test_devcontainer_uses_streamlit_safe_server_defaults(self):
         path = ROOT / ".devcontainer" / "devcontainer.json"
-        text = re.sub(r"(?m)^\s*//.*$", "", path.read_text(encoding="utf-8"))
+        text = re.sub(
+            r"(?m)^\s*//.*$",
+            "",
+            path.read_text(encoding="utf-8"),
+        )
         config = json.loads(text)
 
         command = config["postAttachCommand"]["server"]
@@ -45,11 +52,15 @@ class StreamlitHardeningTests(unittest.TestCase):
         self.assertEqual(message, GENERIC_SEARCH_ERROR)
         self.assertNotIn("private endpoint", message)
         self.assertNotIn("secret detail", message)
-        self.assertIn("RuntimeError: private endpoint and secret detail", captured.output[0])
+        self.assertIn(
+            "RuntimeError: private endpoint and secret detail",
+            captured.output[0],
+        )
         self.assertIn("Traceback", captured.output[0])
 
     def test_app_does_not_render_exception_object(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
+
         self.assertNotIn("st.exception(", source)
         self.assertIn("log_unexpected_search_error", source)
 

@@ -10,6 +10,8 @@ from decimal import Decimal
 from typing import Any, Callable
 
 from amount_matching import AmountCriterion, parse_amount_criterion
+from result_ordering import sort_result_rows
+from search_manifest import build_search_manifest
 
 DEFAULT_API_URL = "https://mempool.space/api"
 DEFAULT_API_DELAY = 0.03
@@ -820,6 +822,7 @@ def search_bitcoin_window(
         candidate_meta
     )
     analyzed_blocks = 0
+    analyzed_hashes: list[dict[str, Any]] = []
 
     for block_position, block in enumerate(
         candidate_meta,
@@ -863,7 +866,8 @@ def search_bitcoin_window(
             ) from exc
 
         for tx_index, transaction in enumerate(
-            transactions
+            transactions,
+            start=1,
         ):
             txid = transaction["txid"]
             explorer, secondary = (
@@ -905,6 +909,11 @@ def search_bitcoin_window(
                     output.get(
                         "destination"
                     ) or ""
+                )
+                destination_address = (
+                    destination
+                    if destination and destination != "OP_RETURN"
+                    else ""
                 )
                 script_type = str(
                     output.get(
@@ -955,14 +964,8 @@ def search_bitcoin_window(
                     ),
                     "received": "",
                     "source": "",
-                    "destination": (
-                        destination
-                        or script_type
-                    ),
-                    "account": (
-                        destination
-                        or script_type
-                    ),
+                    "destination": destination_address,
+                    "account": destination_address,
                     "evidence": (
                         "Sortie Bitcoin "
                         f"vout #{output['index']}"
@@ -1026,14 +1029,8 @@ def search_bitcoin_window(
                             ),
                             "received": "",
                             "source": "",
-                            "destination": (
-                                destination
-                                or script_type
-                            ),
-                            "account": (
-                                destination
-                                or script_type
-                            ),
+                            "destination": destination_address,
+                            "account": destination_address,
                             "detail": (
                                 "Sortie vout "
                                 f"#{output['index']} · "
@@ -1088,6 +1085,7 @@ def search_bitcoin_window(
             )
 
         analyzed_blocks += 1
+        analyzed_hashes.append({"number": height, "hash": block_hash})
         if progress_callback:
             progress_callback(
                 block_position,
@@ -1095,35 +1093,17 @@ def search_bitcoin_window(
                 height,
             )
 
-    def reverse_key(
-        row: dict[str, Any],
-    ) -> tuple[int, int]:
-        return (
-            int(row.get("block", 0)),
-            int(
-                row.get(
-                    "transaction_index",
-                    0,
-                )
-            ),
-        )
-
-    transactions_rows.sort(
-        key=reverse_key,
-        reverse=True,
-    )
-    operations_rows.sort(
-        key=reverse_key,
-        reverse=True,
-    )
-    movements_rows.sort(
-        key=reverse_key,
-        reverse=True,
-    )
-    matches_rows.sort(
-        key=reverse_key,
-        reverse=True,
-    )
+    transaction_indices = {
+        (int(row["block"]), str(row["signature"])): int(row["transaction_index"])
+        for row in transactions_rows
+    }
+    for rows in (
+        transactions_rows,
+        operations_rows,
+        movements_rows,
+        matches_rows,
+    ):
+        sort_result_rows(rows, transaction_indices)
 
     first_candidate = (
         int(candidate_meta[0]["height"])
@@ -1136,10 +1116,12 @@ def search_bitcoin_window(
         else end_near
     )
 
-    return {
+    result = {
         "network": "Bitcoin",
+        "center_dt": center_dt,
         "start_dt": start_dt,
         "end_dt": end_dt,
+        "tolerance_seconds": tolerance_seconds,
         "start_block": first_candidate,
         "end_block": last_candidate,
         "query_start_block": scan_start,
@@ -1195,3 +1177,7 @@ def search_bitcoin_window(
         ),
         "time_basis": "block_timestamp",
     }
+    result["manifest"] = build_search_manifest(
+        result, endpoint=api_url, amount_input=amount_btc, analyzed_hashes=analyzed_hashes
+    )
+    return result
