@@ -73,30 +73,6 @@ def _retry_after_seconds(value: str | None, now: datetime | None = None) -> floa
     return max(0.0, (retry_at - (now or datetime.now(timezone.utc))).total_seconds())
 
 
-def _parse_amount(value: str | Decimal | None, asset: str) -> Decimal | None:
-    if value is None:
-        return None
-
-    raw = str(value).strip().replace(",", ".")
-    if not raw:
-        return None
-
-    try:
-        amount = Decimal(raw)
-    except InvalidOperation as exc:
-        raise ValueError("Montant invalide.") from exc
-
-    if amount < 0:
-        raise ValueError("Le montant doit être positif ou nul.")
-
-    if asset == "SOL":
-        lamports = amount * LAMPORTS_PER_SOL
-        if lamports != lamports.to_integral_value():
-            raise ValueError("Un montant SOL ne peut pas dépasser 9 décimales.")
-
-    return amount
-
-
 def _format_decimal(value: Decimal) -> str:
     text = format(value, "f")
     if "." in text:
