@@ -5,7 +5,7 @@ import unittest
 from datetime import date, datetime, time, timezone
 from unittest.mock import patch
 
-from bitcoin_engine import (
+from blockchain_lookup.engines.bitcoin import (
     _decode_output_destination,
     _parse_block,
     _parse_transaction,
@@ -210,7 +210,7 @@ class BitcoinEngineTests(unittest.TestCase):
         )
         parsed = _parse_block(raw_block)
         api = FakeBitcoinApi(raw_block)
-        with patch("bitcoin_engine.urllib.request.urlopen", side_effect=api):
+        with patch("blockchain_lookup.engines.bitcoin.urllib.request.urlopen", side_effect=api):
             result = search_bitcoin_window(
                 SEARCH_DATE,
                 SEARCH_TIME,

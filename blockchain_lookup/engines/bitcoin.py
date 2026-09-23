@@ -7,11 +7,12 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
-from amount_matching import AmountCriterion, parse_amount_criterion
-from result_ordering import sort_result_rows
-from search_manifest import build_search_manifest
+from blockchain_lookup.domain.amount_matching import AmountCriterion, parse_amount_criterion
+from blockchain_lookup.domain.models import SearchResult
+from blockchain_lookup.domain.result_ordering import sort_result_rows
+from blockchain_lookup.domain.search_manifest import build_search_manifest
 
 DEFAULT_API_URL = "https://mempool.space/api"
 DEFAULT_API_DELAY = 0.03
@@ -484,7 +485,7 @@ def search_bitcoin_window(
     retries: int = 6,
     progress_callback: ProgressCallback | None = None,
     status_callback: StatusCallback | None = None,
-) -> dict[str, Any]:
+) -> SearchResult:
     """Recherche les sorties BTC confirmées dans une fenêtre UTC."""
 
     if tolerance_seconds < 0:
@@ -1180,4 +1181,4 @@ def search_bitcoin_window(
     result["manifest"] = build_search_manifest(
         result, endpoint=api_url, amount_input=amount_btc, analyzed_hashes=analyzed_hashes
     )
-    return result
+    return cast(SearchResult, result)

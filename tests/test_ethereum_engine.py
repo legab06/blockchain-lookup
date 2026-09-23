@@ -4,7 +4,7 @@ import unittest
 from datetime import date, datetime, time, timezone
 from unittest.mock import patch
 
-from ethereum_engine import (
+from blockchain_lookup.engines.ethereum import (
     KNOWN_ERC20,
     TRANSFER_TOPIC,
     search_ethereum_window,
@@ -113,7 +113,7 @@ class FakeEthereumRpc:
 
 
 def _search(rpc, amount=None, asset="ETH"):
-    with patch("ethereum_engine.urllib.request.urlopen", side_effect=rpc):
+    with patch("blockchain_lookup.engines.ethereum.urllib.request.urlopen", side_effect=rpc):
         return search_ethereum_window(
             SEARCH_DATE,
             SEARCH_TIME,
@@ -240,7 +240,7 @@ class EthereumEngineTests(unittest.TestCase):
     def test_pruned_rpc_history_uses_earliest_available_block(self):
         statuses = []
         rpc = FakeEthereumRpc(pruned_from=100)
-        with patch("ethereum_engine.urllib.request.urlopen", side_effect=rpc):
+        with patch("blockchain_lookup.engines.ethereum.urllib.request.urlopen", side_effect=rpc):
             result = search_ethereum_window(
                 SEARCH_DATE,
                 SEARCH_TIME,

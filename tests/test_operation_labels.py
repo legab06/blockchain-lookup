@@ -1,6 +1,6 @@
 import unittest
 
-from operation_labels import operation_type_label
+from blockchain_lookup.ui.operation_labels import operation_type_label
 
 
 class OperationLabelTests(unittest.TestCase):

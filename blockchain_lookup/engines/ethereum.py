@@ -8,11 +8,12 @@ import urllib.request
 from collections import defaultdict
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
-from amount_matching import AmountCriterion, parse_amount_criterion
-from result_ordering import sort_result_rows
-from search_manifest import build_search_manifest
+from blockchain_lookup.domain.amount_matching import AmountCriterion, parse_amount_criterion
+from blockchain_lookup.domain.models import SearchResult
+from blockchain_lookup.domain.result_ordering import sort_result_rows
+from blockchain_lookup.domain.search_manifest import build_search_manifest
 
 DEFAULT_RPC_URL = "https://ethereum-rpc.publicnode.com"
 DEFAULT_RPC_DELAY = 0.03
@@ -197,7 +198,7 @@ def search_ethereum_window(
     retries: int = 8,
     progress_callback: ProgressCallback | None = None,
     status_callback: StatusCallback | None = None,
-) -> dict[str, Any]:
+) -> SearchResult:
     """
     Recherche les transactions Ethereum mainnet situées dans une fenêtre UTC.
 
@@ -1282,4 +1283,4 @@ def search_ethereum_window(
     result["manifest"] = build_search_manifest(
         result, endpoint=rpc_url, amount_input=amount_eth, analyzed_hashes=analyzed_hashes
     )
-    return result
+    return cast(SearchResult, result)

@@ -1,0 +1,51 @@
+import pandas as pd
+import streamlit as st
+
+
+@st.cache_data(show_spinner=False)
+def to_csv_bytes(rows: list[dict]) -> bytes:
+    return (
+        pd.DataFrame(rows)
+        .to_csv(index=False, sep=";", encoding="utf-8-sig")
+        .encode("utf-8-sig")
+    )
+
+
+def render_downloads(
+    filtered_rows: list[dict],
+    page_rows: list[dict],
+    *,
+    filename: str,
+    key_prefix: str,
+) -> None:
+    if not page_rows:
+        return
+
+    st.download_button(
+        "Télécharger la page affichée CSV",
+        data=to_csv_bytes(page_rows),
+        file_name=filename,
+        mime="text/csv",
+        key=f"{key_prefix}_page_csv",
+        on_click="ignore",
+    )
+
+    if len(filtered_rows) > len(page_rows):
+        prepare_full = st.checkbox(
+            f"Préparer le CSV complet ({len(filtered_rows)} lignes)",
+            value=False,
+            key=f"{key_prefix}_prepare_full_csv",
+            help=(
+                "La génération complète consomme davantage de mémoire. "
+                "Elle n'est effectuée que si cette case est cochée."
+            ),
+        )
+        if prepare_full:
+            st.download_button(
+                "Télécharger toutes les lignes filtrées CSV",
+                data=to_csv_bytes(filtered_rows),
+                file_name=filename.replace(".csv", "_complet.csv"),
+                mime="text/csv",
+                key=f"{key_prefix}_full_csv",
+                on_click="ignore",
+            )

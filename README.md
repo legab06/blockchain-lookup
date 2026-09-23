@@ -237,27 +237,27 @@ Les services publics peuvent cependant appliquer des limites de débit, réduire
 ```text
 blockchain-lookup/
 ├── app.py
-├── amount_matching.py
-├── solana_engine.py
-├── ethereum_engine.py
-├── bitcoin_engine.py
+├── blockchain_lookup/
+│   ├── version.py
+│   ├── domain/       # contrats, montants, ordre et manifest
+│   ├── engines/      # recherches Solana, Ethereum et Bitcoin
+│   └── ui/           # application Streamlit et présentation
+├── pyproject.toml
 ├── requirements.txt
-├── config.toml
+├── .streamlit/config.toml
 └── tests/
-    ├── test_amount_matching.py
-    └── test_bitcoin_engine.py
 ```
 
 ### Fichiers principaux
 
 | Fichier | Rôle |
 | --- | --- |
-| `app.py` | interface Streamlit, vues, pagination, filtrage et exports |
-| `amount_matching.py` | logique commune de parsing et de comparaison des montants |
-| `solana_engine.py` | moteur de recherche Solana |
-| `ethereum_engine.py` | moteur de recherche Ethereum |
-| `bitcoin_engine.py` | moteur Bitcoin et parser de blocs/transactions brutes |
-| `tests/` | tests unitaires du matching et du parser Bitcoin |
+| `app.py` | point d'entrée `streamlit run app.py` |
+| `blockchain_lookup/engines/` | moteurs et protocoles réseau propres à chaque blockchain |
+| `blockchain_lookup/domain/` | contrat `SearchResult`, matching, ordre et manifest |
+| `blockchain_lookup/ui/` | vues, thèmes, tableaux, pagination, exports et messages |
+| `blockchain_lookup/version.py` | version unique de l'application |
+| `tests/` | tests unitaires hors ligne des moteurs, du domaine et de l'UI |
 
 ---
 
@@ -267,6 +267,8 @@ Les tests peuvent être lancés avec :
 
 ```bash
 python -m unittest discover -s tests -v
+ruff check .
+python -m compileall .
 ```
 
 Ils couvrent notamment :
@@ -276,7 +278,9 @@ Ils couvrent notamment :
 - la limite des 8 décimales BTC ;
 - le parsing de transactions Bitcoin legacy ;
 - le parsing SegWit et le calcul du TXID sans witness ;
-- le décodage des sorties Bitcoin standards testées.
+- le décodage des sorties Bitcoin standards testées ;
+- les moteurs Solana et Ethereum, la complétude et l'ordre des résultats ;
+- le manifest JSON et les messages de l'interface.
 
 ---
 

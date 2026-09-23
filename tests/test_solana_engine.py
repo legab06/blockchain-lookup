@@ -5,8 +5,8 @@ import urllib.error
 from datetime import date, datetime, time, timezone
 from unittest.mock import patch
 
-from search_result_messages import no_matches_message, partial_search_warning
-from solana_engine import (
+from blockchain_lookup.ui.messages import no_matches_message, partial_search_warning
+from blockchain_lookup.engines.solana import (
     MAX_CANDIDATE_SLOTS,
     KNOWN_TOKEN_MINTS,
     SolanaSearchError,
@@ -93,7 +93,7 @@ def _transaction(signature, accounts, meta, instructions=None, inner=None):
 def _search_solana_transaction(tx, amount, asset="SOL"):
     rpc = FakeSolanaRpc()
     rpc.transactions_by_slot[CENTER_TS] = [tx]
-    with patch("solana_engine.urllib.request.urlopen", side_effect=rpc):
+    with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc):
         return search_solana_window(
             SEARCH_DATE,
             SEARCH_TIME,
@@ -107,7 +107,7 @@ def _search_solana_transaction(tx, amount, asset="SOL"):
 class SolanaEngineTests(unittest.TestCase):
     def test_window_below_limit_fetches_blocks(self):
         rpc = FakeSolanaRpc()
-        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc):
+        with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc):
             result = search_solana_window(
                 SEARCH_DATE, SEARCH_TIME, tolerance_seconds=10, rpc_delay=0,
                 rpc_url="https://user:secret@rpc.example.com/v2/key?api_key=token",
@@ -128,7 +128,7 @@ class SolanaEngineTests(unittest.TestCase):
     def test_unavailable_candidate_marks_search_partial(self):
         rpc = FakeSolanaRpc()
         rpc.missing_block_slots.add(CENTER_TS)
-        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc):
+        with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc):
             result = search_solana_window(
                 SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
             )
@@ -145,7 +145,7 @@ class SolanaEngineTests(unittest.TestCase):
 
     def test_window_above_limit_stops_before_get_block(self):
         rpc = FakeSolanaRpc()
-        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc):
+        with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc):
             with self.assertRaises(SolanaSearchError) as caught:
                 search_solana_window(
                     SEARCH_DATE, SEARCH_TIME, tolerance_seconds=400, rpc_delay=0
@@ -173,8 +173,8 @@ class SolanaEngineTests(unittest.TestCase):
                 {"Retry-After": "7"}, None,
             )
         )
-        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc), patch(
-            "solana_engine.time.sleep"
+        with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc), patch(
+            "blockchain_lookup.engines.solana.time.sleep"
         ) as sleep:
             search_solana_window(
                 SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0,
@@ -192,8 +192,8 @@ class SolanaEngineTests(unittest.TestCase):
             )
             for _ in range(2)
         )
-        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc), patch(
-            "solana_engine.time.sleep"
+        with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc), patch(
+            "blockchain_lookup.engines.solana.time.sleep"
         ) as sleep:
             search_solana_window(
                 SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0,
@@ -205,8 +205,8 @@ class SolanaEngineTests(unittest.TestCase):
     def test_rpc_error_is_not_retried(self):
         rpc = FakeSolanaRpc()
         rpc.responses.append({"error": {"code": -32602, "message": "Invalid params"}})
-        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc), patch(
-            "solana_engine.time.sleep"
+        with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc), patch(
+            "blockchain_lookup.engines.solana.time.sleep"
         ) as sleep:
             with self.assertRaisesRegex(SolanaSearchError, "Invalid params"):
                 search_solana_window(
@@ -219,8 +219,8 @@ class SolanaEngineTests(unittest.TestCase):
     def test_deterministic_get_block_error_is_not_skipped(self):
         rpc = FakeSolanaRpc()
         rpc.block_error = {"code": -32602, "message": "Invalid params"}
-        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc), patch(
-            "solana_engine.time.sleep"
+        with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc), patch(
+            "blockchain_lookup.engines.solana.time.sleep"
         ) as sleep:
             with self.assertRaisesRegex(SolanaSearchError, "Invalid params"):
                 search_solana_window(
@@ -285,7 +285,7 @@ class SolanaEngineTests(unittest.TestCase):
         ]
         rpc = FakeSolanaRpc()
         rpc.transactions_by_slot[CENTER_TS] = txs
-        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc):
+        with patch("blockchain_lookup.engines.solana.urllib.request.urlopen", side_effect=rpc):
             result = search_solana_window(
                 SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
             )
