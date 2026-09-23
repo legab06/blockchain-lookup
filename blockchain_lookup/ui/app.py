@@ -790,15 +790,22 @@ def run_app() -> None:
     st.markdown(
         """
         <div style="
-            margin-top: 3rem;
-            padding: 1.25rem 0 0.5rem 0;
-            border-top: 1px solid rgba(128, 128, 128, 0.18);
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 999;
+            padding: 0.45rem 1rem;
+            border-top: 1px solid rgba(128, 128, 128, 0.16);
+            background: rgba(255, 255, 255, 0.94);
+            backdrop-filter: blur(6px);
             text-align: center;
-            font-size: 0.82rem;
-            opacity: 0.65;
+            font-size: 0.78rem;
+            color: rgba(49, 51, 63, 0.58);
         ">
             © 2026 Gabriel Albaladejo · Tous droits réservés
         </div>
+        <div style="height: 2.1rem;"></div>
         """,
         unsafe_allow_html=True,
     )
