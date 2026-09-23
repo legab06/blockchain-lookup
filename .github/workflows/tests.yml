@@ -23,7 +23,8 @@ jobs:
         run: >-
           python -m compileall -q app.py amount_matching.py bitcoin_engine.py
           ethereum_engine.py solana_engine.py search_result_messages.py
-          streamlit_errors.py tests
+          streamlit_errors.py operation_labels.py result_ordering.py
+          search_manifest.py tests
 
       - name: Run test suite
         run: python -m unittest discover -s tests -v

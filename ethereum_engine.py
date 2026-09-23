@@ -11,6 +11,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 from amount_matching import AmountCriterion, parse_amount_criterion
+from result_ordering import sort_result_rows
+from search_manifest import build_search_manifest
 
 DEFAULT_RPC_URL = "https://ethereum-rpc.publicnode.com"
 DEFAULT_RPC_DELAY = 0.03
@@ -563,6 +565,7 @@ def search_ethereum_window(
 
     analyzed_blocks = 0
     skipped_blocks = 0
+    analyzed_hashes: list[dict[str, Any]] = []
     outside_window_blocks = 0
 
     def append_operation(
@@ -686,9 +689,36 @@ def search_ethereum_window(
         if not isinstance(transactions, list):
             transactions = []
 
+        indexed_transactions = []
+        for tx in transactions:
+            raw_index = tx.get("transactionIndex") if isinstance(tx, dict) else None
+            rpc_index = (
+                _hex_to_int(raw_index, -1) + 1
+                if raw_index is not None
+                else None
+            )
+            indexed_transactions.append((rpc_index, tx))
+        indexed_transactions.sort(
+            key=lambda item: (
+                item[0] is None,
+                item[0] if item[0] is not None else 0,
+                str(item[1].get("hash") or "") if isinstance(item[1], dict) else "",
+            )
+        )
+        next_synthetic_index = max(
+            (index for index, _tx in indexed_transactions if index is not None),
+            default=0,
+        ) + 1
+        ordered_transactions = []
+        for rpc_index, tx in indexed_transactions:
+            if rpc_index is None:
+                rpc_index = next_synthetic_index
+                next_synthetic_index += 1
+            ordered_transactions.append((rpc_index, tx))
+
         tx_hashes = [
             str(tx.get("hash") or "")
-            for tx in transactions
+            for _tx_index, tx in ordered_transactions
             if isinstance(tx, dict) and tx.get("hash")
         ]
 
@@ -702,7 +732,7 @@ def search_ethereum_window(
                 if isinstance(receipt, dict):
                     receipts_by_hash[tx_hash] = receipt
 
-        for tx_index, tx in enumerate(transactions, start=1):
+        for tx_index, tx in ordered_transactions:
             if not isinstance(tx, dict):
                 continue
 
@@ -994,6 +1024,8 @@ def search_ethereum_window(
             skipped_blocks += 1
         else:
             analyzed_blocks += 1
+            if block.get("hash"):
+                analyzed_hashes.append({"number": block_number, "hash": str(block["hash"])})
 
     if progress_callback:
         progress_callback(total_candidates, total_candidates, query_end_block)
@@ -1248,9 +1280,21 @@ def search_ethereum_window(
         seen_matches.add(key)
         unique_matches.append(row)
 
+    transaction_indices = {
+        (int(row["block"]), str(row["signature"])): int(row["transaction_index"])
+        for row in transactions_rows
+    }
+    for rows in (
+        transactions_rows,
+        operations_rows,
+        movements_rows,
+        unique_matches,
+    ):
+        sort_result_rows(rows, transaction_indices)
+
     _notify(status_callback, "Recherche Ethereum terminée.")
 
-    return {
+    result = {
         "network": "Ethereum",
         "center_dt": center_dt,
         "start_dt": start_dt,
@@ -1284,3 +1328,7 @@ def search_ethereum_window(
         "movements": movements_rows,
         "matches": unique_matches,
     }
+    result["manifest"] = build_search_manifest(
+        result, endpoint=rpc_url, amount_input=amount_eth, analyzed_hashes=analyzed_hashes
+    )
+    return result

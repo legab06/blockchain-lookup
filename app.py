@@ -9,6 +9,8 @@ import streamlit as st
 
 from bitcoin_engine import BitcoinSearchError, search_bitcoin_window
 from ethereum_engine import EthereumSearchError, search_ethereum_window
+from operation_labels import operation_type_label
+from search_manifest import manifest_json_bytes
 from search_result_messages import no_matches_message, partial_search_warning
 from solana_engine import SolanaSearchError, search_solana_window
 from streamlit_errors import log_unexpected_search_error
@@ -330,6 +332,7 @@ TABLE_COLUMNS = {
         "destination",
         "account",
         "signature",
+        "transaction_index",
         "detail",
         "secondary_explorer",
         "explorer",
@@ -361,6 +364,7 @@ TABLE_COLUMNS = {
         "account",
         "evidence",
         "signature",
+        "transaction_index",
         "detail",
         "secondary_explorer",
         "explorer",
@@ -373,6 +377,7 @@ TABLE_COLUMNS = {
         "delta_amount",
         "account",
         "signature",
+        "transaction_index",
         "match_target",
         "secondary_explorer",
         "explorer",
@@ -380,30 +385,16 @@ TABLE_COLUMNS = {
     ],
 }
 
-OPERATION_TYPE_LABELS = {
-    "transfer": "Transfert natif",
-    "token_transfer": "Transfert de token",
-    "swap_probable": "Swap probable",
-    "balance_delta": "Variation de solde",
-}
-
-
-def localize_rows(rows: list[dict]) -> list[dict]:
+def localize_rows(rows: list[dict], network: str) -> list[dict]:
     localized: list[dict] = []
     for row in rows:
         item = dict(row)
         if item.get("solscan") and not item.get("secondary_explorer"):
             item["secondary_explorer"] = item["solscan"]
         if "operation_type" in item:
-            item["operation_type"] = OPERATION_TYPE_LABELS.get(
-                item["operation_type"],
-                item["operation_type"],
-            )
+            item["operation_type"] = operation_type_label(item["operation_type"], network)
         if "match_type" in item:
-            item["operation_type"] = OPERATION_TYPE_LABELS.get(
-                item["match_type"],
-                item["match_type"],
-            )
+            item["operation_type"] = operation_type_label(item["match_type"], network)
         if "match_quality" in item:
             item["match_quality"] = {
                 "exact": "Exacte",
@@ -440,7 +431,7 @@ def show_table(
         labels["explorer"] = "mempool.space"
         labels["secondary_explorer"] = "Blockstream"
 
-    table = pd.DataFrame(localize_rows(rows)).reindex(columns=columns)
+    table = pd.DataFrame(localize_rows(rows, network)).reindex(columns=columns)
     table = table.dropna(axis=1, how="all").rename(columns=labels)
 
     if "Statut" in table:
@@ -787,7 +778,8 @@ if submitted:
     # un widget de formulaire n'a pas encore été synchronisé côté serveur.
     st.session_state.pop("lookup_result", None)
 
-    submitted_amount = str(st.session_state.get("lookup_amount", "")).strip()
+    submitted_amount_raw = str(st.session_state.get("lookup_amount", ""))
+    submitted_amount = submitted_amount_raw.strip()
     submitted_asset = str(asset)
     submitted_network = str(network)
 
@@ -848,7 +840,7 @@ if submitted:
                         search_date=search_date,
                         search_time=search_time,
                         tolerance_seconds=int(tolerance),
-                        amount_sol=submitted_amount,
+                        amount_sol=submitted_amount_raw,
                         asset_symbol=submitted_asset,
                         progress_callback=on_progress,
                         status_callback=on_status,
@@ -858,7 +850,7 @@ if submitted:
                         search_date=search_date,
                         search_time=search_time,
                         tolerance_seconds=int(tolerance),
-                        amount_eth=submitted_amount,
+                        amount_eth=submitted_amount_raw,
                         asset_symbol=submitted_asset,
                         progress_callback=on_progress,
                         status_callback=on_status,
@@ -868,7 +860,7 @@ if submitted:
                         search_date=search_date,
                         search_time=search_time,
                         tolerance_seconds=int(tolerance),
-                        amount_btc=submitted_amount,
+                        amount_btc=submitted_amount_raw,
                         asset_symbol=submitted_asset,
                         progress_callback=on_progress,
                         status_callback=on_status,
@@ -909,7 +901,7 @@ if submitted:
                         "Le montant saisi n'a pas été transmis au moteur de recherche."
                     )
 
-                result["submitted_amount_raw"] = submitted_amount
+                result["submitted_amount_raw"] = submitted_amount_raw
                 result["submitted_asset"] = submitted_asset
                 result["submitted_network"] = submitted_network
 
@@ -1266,4 +1258,15 @@ if result and result.get("network") == network:
         st.caption(
             "Une seule table est rendue à la fois afin de limiter la mémoire "
             "serveur et la charge du navigateur sur les recherches volumineuses."
+        )
+
+        st.write("**Manifest technique**")
+        st.json(result["manifest"], expanded=False)
+        st.download_button(
+            "Télécharger le manifest JSON",
+            data=manifest_json_bytes(result["manifest"]),
+            file_name=f"{result['network'].lower()}_manifest.json",
+            mime="application/json",
+            key="download_search_manifest",
+            on_click="ignore",
         )

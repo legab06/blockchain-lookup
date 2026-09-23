@@ -55,6 +55,7 @@ class FakeSolanaRpc:
                 None if params[0] in self.missing_block_slots
                 else {
                     "blockTime": params[0],
+                    "blockhash": f"solana-hash-{params[0]}",
                     "transactions": self.transactions_by_slot.get(params[0], []),
                 }
             )
@@ -108,7 +109,8 @@ class SolanaEngineTests(unittest.TestCase):
         rpc = FakeSolanaRpc()
         with patch("solana_engine.urllib.request.urlopen", side_effect=rpc):
             result = search_solana_window(
-                SEARCH_DATE, SEARCH_TIME, tolerance_seconds=10, rpc_delay=0
+                SEARCH_DATE, SEARCH_TIME, tolerance_seconds=10, rpc_delay=0,
+                rpc_url="https://user:secret@rpc.example.com/v2/key?api_key=token",
             )
 
         self.assertEqual(result["candidate_blocks"], 41)
@@ -118,6 +120,10 @@ class SolanaEngineTests(unittest.TestCase):
         self.assertEqual(result["analyzed_blocks"], 21)
         self.assertEqual(result["outside_window_blocks"], 20)
         self.assertIsNone(partial_search_warning(result))
+        self.assertEqual(
+            result["manifest"]["source"]["endpoint"],
+            "https://[endpoint privé masqué]",
+        )
 
     def test_unavailable_candidate_marks_search_partial(self):
         rpc = FakeSolanaRpc()
@@ -257,6 +263,38 @@ class SolanaEngineTests(unittest.TestCase):
         self.assertEqual(wallet_movement["delta_amount"], "-2.500005")
         self.assertEqual(len(result["matches"]), 1)
         self.assertEqual(result["matches"][0]["match_quality"], "exact")
+        self.assertEqual(result["matches"][0]["transaction_index"], 1)
+        self.assertEqual(result["manifest"]["network"], "Solana")
+        self.assertEqual(result["manifest"]["blocks"]["unit"], "slot")
+        self.assertEqual(result["manifest"]["blocks"]["analyzed_hashes"], [
+            {"number": CENTER_TS, "hash": f"solana-hash-{CENTER_TS}"}
+        ])
+
+    def test_rows_are_newest_transaction_first_with_one_based_indices(self):
+        txs = [
+            _transaction("sol-order-first", ["wallet", "recipient"], {}, instructions=[{
+                "parsed": {"type": "transfer", "info": {
+                    "source": "wallet", "destination": "recipient", "lamports": 1_000_000_000,
+                }},
+            }]),
+            _transaction("sol-order-second", ["wallet", "recipient"], {}, instructions=[{
+                "parsed": {"type": "transfer", "info": {
+                    "source": "wallet", "destination": "recipient", "lamports": 2_000_000_000,
+                }},
+            }]),
+        ]
+        rpc = FakeSolanaRpc()
+        rpc.transactions_by_slot[CENTER_TS] = txs
+        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc):
+            result = search_solana_window(
+                SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
+            )
+
+        expected = ["sol-order-second", "sol-order-first"]
+        self.assertEqual([row["signature"] for row in result["transactions"]], expected)
+        self.assertEqual([row["transaction_index"] for row in result["transactions"]], [2, 1])
+        self.assertEqual([row["signature"] for row in result["operations"]], expected)
+        self.assertEqual([row["transaction_index"] for row in result["operations"]], [2, 1])
 
     def test_spl_usdc_transfer_and_token_balance_deltas(self):
         mint = KNOWN_TOKEN_MINTS["USDC"]

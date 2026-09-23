@@ -31,7 +31,8 @@ def _transfer_log(token, source, destination, raw_amount):
     }
 
 
-def _transaction(tx_hash, *, sender=USER, destination=ROUTER, value=0, input_data="0x"):
+def _transaction(tx_hash, *, sender=USER, destination=ROUTER, value=0,
+                 input_data="0x", transaction_index=None):
     return {
         "hash": tx_hash,
         "from": sender,
@@ -39,6 +40,7 @@ def _transaction(tx_hash, *, sender=USER, destination=ROUTER, value=0, input_dat
         "value": hex(value),
         "input": input_data,
         "gasPrice": hex(20_000_000_000),
+        **({"transactionIndex": hex(transaction_index)} if transaction_index is not None else {}),
     }
 
 
@@ -86,6 +88,7 @@ class FakeEthereumRpc:
             else:
                 result = None if full and block_number in self.unavailable_blocks else {
                     "timestamp": hex(block_number),
+                    "hash": f"ethereum-hash-{block_number}",
                     "transactions": self.transactions if full and block_number == CENTER_TS else [],
                 }
                 response = {"id": payload["id"], "result": result}
@@ -131,12 +134,31 @@ class EthereumEngineTests(unittest.TestCase):
         self.assertEqual(transfer["sent"], "1.5 ETH")
         self.assertEqual(result["matches"][0]["match_quality"], "exact")
         self.assertEqual(result["matches"][0]["matched_asset"], "ETH")
+        self.assertEqual(result["matches"][0]["transaction_index"], 1)
+        self.assertEqual(result["manifest"]["network"], "Ethereum")
+        self.assertEqual(result["manifest"]["blocks"]["analyzed_hashes"], [
+            {"number": CENTER_TS, "hash": f"ethereum-hash-{CENTER_TS}"}
+        ])
 
     def test_native_eth_transfer_approximate(self):
         tx = _transaction("eth-native-approx", value=1_500_000_500_000_000_000)
         result = _search(FakeEthereumRpc([tx]), "1.5")
 
         self.assertTrue(any(row["match_quality"] == "approximate" for row in result["matches"]))
+
+    def test_results_follow_explicit_transaction_index_not_rpc_array_order(self):
+        first = _transaction("eth-order-first", value=1_000_000_000_000_000_000,
+                             transaction_index=0)
+        second = _transaction("eth-order-second", value=2_000_000_000_000_000_000,
+                              transaction_index=1)
+        result = _search(FakeEthereumRpc([second, first]))
+
+        self.assertEqual(
+            [row["signature"] for row in result["transactions"]],
+            ["eth-order-second", "eth-order-first"],
+        )
+        self.assertEqual([row["transaction_index"] for row in result["transactions"]], [2, 1])
+        self.assertEqual([row["transaction_index"] for row in result["operations"]], [2, 1])
 
     def test_usdc_transfer_event_and_receipt_batch(self):
         tx = _transaction("eth-usdc-1", value=0)
