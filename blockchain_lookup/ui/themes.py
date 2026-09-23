@@ -53,7 +53,7 @@ def apply_network_theme(network: str) -> None:
             }}
             .st-key-network_selector [data-testid="stSegmentedControl"] > div {{
                 width: 100%;
-                gap: 0.38rem;
+                gap: 0.62rem;
                 background: transparent !important;
             }}
             .st-key-network_selector button {{
@@ -227,7 +227,7 @@ def apply_base_styles() -> None:
             .st-key-network_selector {
                 width: 100%;
                 max-width: 520px;
-                margin-bottom: 1.2rem;
+                margin-bottom: 0.55rem;
             }
 
             @media (max-width: 768px) {
@@ -239,7 +239,7 @@ def apply_base_styles() -> None:
                 }
                 .st-key-network_selector {
                     max-width: none;
-                    margin-bottom: 0.9rem;
+                    margin-bottom: 0.5rem;
                 }
             }
         </style>
