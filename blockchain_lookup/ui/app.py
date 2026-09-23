@@ -21,7 +21,7 @@ from blockchain_lookup.runtime.concurrency import (
 from blockchain_lookup.ui.downloads import render_downloads
 from blockchain_lookup.ui.errors import log_unexpected_search_error
 from blockchain_lookup.ui.messages import no_matches_message, partial_search_warning
-from blockchain_lookup.ui.pagination import paginate_rows, render_pagination_footer
+from blockchain_lookup.ui.pagination import paginate_rows, render_pagination_controls
 from blockchain_lookup.ui.tables import filter_rows, show_table
 from blockchain_lookup.ui.themes import apply_base_styles, apply_network_theme
 
@@ -43,6 +43,42 @@ def clear_search_results() -> None:
     for prefix in ("matches", "transactions", "operations", "movements"):
         for suffix in ("page", "page_size", "prepare_full_csv"):
             st.session_state.pop(f"{prefix}_{suffix}", None)
+
+
+def render_table_footer(
+    *,
+    filtered_rows: list[dict],
+    page_rows: list[dict],
+    filename: str,
+    key_prefix: str,
+    page: int,
+    total_pages: int,
+    page_size: int,
+) -> None:
+    if not page_rows:
+        return
+
+    footer_left, footer_right = st.columns(
+        [2.45, 1.85],
+        vertical_alignment="center",
+    )
+
+    with footer_left:
+        render_downloads(
+            filtered_rows,
+            page_rows,
+            filename=filename,
+            key_prefix=key_prefix,
+        )
+
+    with footer_right:
+        render_pagination_controls(
+            total_rows=len(filtered_rows),
+            page=page,
+            total_pages=total_pages,
+            page_size=page_size,
+            key_prefix=key_prefix,
+        )
 
 
 def run_app() -> None:
@@ -165,10 +201,10 @@ def run_app() -> None:
 
     if submitted and try_start_session_search(st.session_state):
         try:
-            # Un nouveau lancement invalide immédiatement l'ancien résultat. Cela évite
-            # qu'une recherche précédente reste affichée si la nouvelle échoue ou si
-            # un widget de formulaire n'a pas encore été synchronisé côté serveur.
-            st.session_state.pop("lookup_result", None)
+            # Une nouvelle recherche repart du même état propre que le bouton
+            # « Effacer la recherche » : ancien résultat, vue, filtres, pagination
+            # et préparation CSV disparaissent avant le lancement.
+            clear_search_results()
 
             submitted_amount_raw = str(st.session_state.get("lookup_amount", ""))
             submitted_amount = submitted_amount_raw.strip()
@@ -639,19 +675,14 @@ def run_app() -> None:
                 network=result["network"],
             )
 
-            render_pagination_footer(
-                total_rows=len(filtered_rows),
+            render_table_footer(
+                filtered_rows=filtered_rows,
+                page_rows=page_rows,
+                filename=filename,
+                key_prefix=key_prefix,
                 page=page,
                 total_pages=total_pages,
                 page_size=page_size,
-                key_prefix=key_prefix,
-            )
-
-            render_downloads(
-                filtered_rows,
-                page_rows,
-                filename=filename,
-                key_prefix=key_prefix,
             )
 
         else:
