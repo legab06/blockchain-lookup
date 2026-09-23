@@ -786,3 +786,19 @@ def run_app() -> None:
                     key="download_search_manifest",
                     on_click="ignore",
                 )
+
+    st.markdown(
+        """
+        <div style="
+            margin-top: 3rem;
+            padding: 1.25rem 0 0.5rem 0;
+            border-top: 1px solid rgba(128, 128, 128, 0.18);
+            text-align: center;
+            font-size: 0.82rem;
+            opacity: 0.65;
+        ">
+            © 2026 Gabriel Albaladejo · Tous droits réservés
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
