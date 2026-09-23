@@ -349,3 +349,20 @@ Une absence de correspondance ne signifie donc pas nécessairement qu'une opéra
 - JSON-RPC Solana
 - JSON-RPC Ethereum
 - API mempool.space / parsing Bitcoin local
+
+
+---
+
+## Licence
+
+Copyright © 2026 **legab06** — **Tous droits réservés**.
+
+Blockchain Lookup est publié sous une **licence propriétaire**. La mise à disposition
+publique du code source ne constitue pas une autorisation générale de l'utiliser,
+le modifier, le redistribuer, l'héberger, le commercialiser ou d'en créer des
+œuvres dérivées.
+
+Les droits nécessaires au fonctionnement du dépôt public sur GitHub restent
+soumis aux Conditions d'utilisation de GitHub.
+
+Voir le fichier [LICENSE](LICENSE) pour les conditions complètes.
