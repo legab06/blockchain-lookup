@@ -15,9 +15,11 @@ from blockchain_lookup.engines.ethereum import EthereumSearchError, search_ether
 from blockchain_lookup.engines.solana import SolanaSearchError, search_solana_window
 from blockchain_lookup.runtime.concurrency import (
     SEARCH_LIMITER,
+    SearchQueueTimeoutError,
     finish_session_search,
     try_start_session_search,
 )
+from blockchain_lookup.runtime.result_limits import ResultLimitExceeded
 from blockchain_lookup.ui.downloads import render_downloads
 from blockchain_lookup.ui.errors import log_unexpected_search_error
 from blockchain_lookup.ui.messages import no_matches_message, partial_search_warning
@@ -51,6 +53,8 @@ def render_table_footer(
     page_rows: list[dict],
     filename: str,
     key_prefix: str,
+    table_kind: str,
+    network: str,
     page: int,
     total_pages: int,
     page_size: int,
@@ -69,6 +73,8 @@ def render_table_footer(
             page_rows,
             filename=filename,
             key_prefix=key_prefix,
+            table_kind=table_kind,
+            network=network,
         )
 
     with footer_right:
@@ -351,6 +357,28 @@ def run_app() -> None:
                                 search_id, submitted_network, monotonic() - started_at,
                                 len(result["matches"]),
                             )
+                        except SearchQueueTimeoutError as exc:
+                            logger.warning(
+                                "Search failed id=%s network=%s type=%s duration_seconds=%.3f",
+                                search_id, submitted_network, type(exc).__name__, monotonic() - started_at,
+                            )
+                            status_box.update(
+                                label="Serveur occupé",
+                                state="error",
+                                expanded=True,
+                            )
+                            st.error(str(exc))
+                        except ResultLimitExceeded as exc:
+                            logger.warning(
+                                "Search failed id=%s network=%s type=%s duration_seconds=%.3f",
+                                search_id, submitted_network, type(exc).__name__, monotonic() - started_at,
+                            )
+                            status_box.update(
+                                label="Limite de résultats atteinte",
+                                state="error",
+                                expanded=True,
+                            )
+                            st.error(str(exc))
                         except ValueError as exc:
                             logger.warning(
                                 "Search failed id=%s network=%s type=%s duration_seconds=%.3f",
@@ -689,6 +717,8 @@ def run_app() -> None:
                     page_rows=page_rows,
                     filename=filename,
                     key_prefix=key_prefix,
+                    table_kind=table_kind,
+                    network=result["network"],
                     page=page,
                     total_pages=total_pages,
                     page_size=page_size,
@@ -734,6 +764,12 @@ def run_app() -> None:
                         if result["search_completeness"] == "complete"
                         else "Partielle"
                     )
+                    if result.get("covered_start_dt") and result.get("covered_end_dt"):
+                        st.write("**Couverture temporelle disponible**")
+                        st.code(
+                            f"{result['covered_start_dt'].strftime('%d/%m/%Y %H:%M:%S')} → "
+                            f"{result['covered_end_dt'].strftime('%d/%m/%Y %H:%M:%S')} UTC"
+                        )
 
                 st.caption(
                     "Une seule table est rendue à la fois afin de limiter la mémoire "

@@ -46,6 +46,10 @@ Tolérance : ± 30 secondes
 ```
 
 Le moteur localise ensuite les blocs ou slots correspondant à cette période et n'analyse que la zone utile.
+Si la fenêtre déborde l'historique disponible ou le dernier bloc confirmé, la
+recherche est signalée comme **partielle**. Une fenêtre entièrement hors
+historique provoque une erreur explicite ; une absence de correspondance dans
+une recherche partielle n'est pas concluante pour la portion non couverte.
 
 ### Montant facultatif
 
@@ -102,6 +106,10 @@ Le moteur Solana :
 - détecte heuristiquement certains **swaps probables** ;
 - recherche également le montant brut encodé dans certaines instructions.
 
+Les transactions Solana échouées restent visibles dans **Transactions**, sans
+être traitées comme des transferts ou swaps exécutés. Les montants seulement
+présents dans des données brutes sont signalés comme des **indices techniques**.
+
 Les appels sont volontairement limités et temporisés pour mieux supporter les restrictions du RPC public.
 
 ### Ethereum
@@ -118,6 +126,12 @@ Le moteur Ethereum :
 - peut retrouver un montant encodé dans le calldata lorsqu'il complète une détection de swap.
 
 Le moteur détecte également les RPC dont l'historique a été **pruné**. Si la période demandée est antérieure au premier bloc conservé par le fournisseur, l'application indique qu'un RPC avec historique plus ancien ou de type archive est nécessaire.
+
+Un reçu Ethereum indisponible donne le statut **Statut inconnu** et rend la
+recherche partielle ; il ne prouve pas une exécution échouée. Un montant
+présent uniquement dans le calldata d'un swap est un indice technique. WETH
+et WSOL peuvent compter économiquement comme ETH et SOL dans la détection de
+swaps, mais l'actif observé reste identifié dans les résultats.
 
 > Les transferts ETH internes exécutés exclusivement à l'intérieur de contrats ne sont pas tous observables avec le JSON-RPC standard. Une API de traces serait nécessaire pour une couverture exhaustive de ce cas.
 
@@ -231,8 +245,11 @@ Aucun secret n'est requis avec les endpoints publics configurés par défaut.
 Le serveur limite par défaut les scans simultanés à trois. La variable
 `BLOCKCHAIN_LOOKUP_MAX_CONCURRENT_SEARCHES` permet de fixer une autre limite
 positive ; une valeur absente, invalide ou non positive revient à trois. Les
-recherches supplémentaires attendent qu'une place se libère. Cette limite
-s'applique à chaque processus Streamlit.
+recherches supplémentaires attendent qu'une place se libère, au plus 30 secondes
+par défaut (`BLOCKCHAIN_LOOKUP_SEARCH_QUEUE_TIMEOUT_SECONDS`). Cette limite
+s'applique à chaque processus Streamlit. Une recherche s'interrompt aussi avant
+de générer plus de 50 000 lignes détaillées par défaut
+(`BLOCKCHAIN_LOOKUP_MAX_RESULT_ROWS`) ; aucun résultat n'est tronqué silencieusement.
 
 Les services publics peuvent cependant appliquer des limites de débit, réduire leur historique ou modifier leurs conditions d'accès. Pour un usage intensif, il est préférable de prévoir ses propres endpoints RPC/API.
 

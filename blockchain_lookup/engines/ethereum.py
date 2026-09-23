@@ -14,6 +14,7 @@ from blockchain_lookup.domain.amount_matching import AmountCriterion, parse_amou
 from blockchain_lookup.domain.models import SearchResult
 from blockchain_lookup.domain.result_ordering import sort_result_rows
 from blockchain_lookup.domain.search_manifest import build_search_manifest
+from blockchain_lookup.runtime.result_limits import ResultRowBudget, configured_max_result_rows
 
 DEFAULT_RPC_URL = "https://ethereum-rpc.publicnode.com"
 DEFAULT_RPC_DELAY = 0.03
@@ -457,6 +458,15 @@ def search_ethereum_window(
             "Cette recherche nécessite un RPC Ethereum avec historique archive."
         )
 
+    coverage_missing_before = start_ts < earliest_available_ts
+    coverage_missing_after = end_ts > latest_ts
+    covered_start_dt = datetime.fromtimestamp(
+        max(start_ts, earliest_available_ts), tz=timezone.utc
+    )
+    covered_end_dt = datetime.fromtimestamp(
+        min(end_ts, latest_ts), tz=timezone.utc
+    )
+
     def first_block_at_or_after(target_ts: int) -> int:
         low = minimum_available_block
         high = latest_block
@@ -509,11 +519,12 @@ def search_ethereum_window(
             "Réduisez la tolérance à moins d'environ 80 minutes."
         )
 
-    transactions_rows: list[dict[str, Any]] = []
-    operations_rows: list[dict[str, Any]] = []
-    movements_rows: list[dict[str, Any]] = []
-    raw_amount_evidence_rows: list[dict[str, Any]] = []
-    direct_native_match_rows: list[dict[str, Any]] = []
+    row_budget = ResultRowBudget(configured_max_result_rows())
+    transactions_rows: list[dict[str, Any]] = row_budget.rows()
+    operations_rows: list[dict[str, Any]] = row_budget.rows()
+    movements_rows: list[dict[str, Any]] = row_budget.rows()
+    raw_amount_evidence_rows: list[dict[str, Any]] = row_budget.rows()
+    direct_native_match_rows: list[dict[str, Any]] = row_budget.rows()
 
     analyzed_blocks = 0
     skipped_blocks = 0
@@ -677,9 +688,12 @@ def search_ethereum_window(
         receipts_by_hash: dict[str, dict[str, Any]] = {}
         for offset in range(0, len(tx_hashes), RECEIPT_BATCH_SIZE):
             chunk = tx_hashes[offset : offset + RECEIPT_BATCH_SIZE]
-            receipts = rpc_batch(
-                [("eth_getTransactionReceipt", [tx_hash]) for tx_hash in chunk]
-            )
+            try:
+                receipts = rpc_batch(
+                    [("eth_getTransactionReceipt", [tx_hash]) for tx_hash in chunk]
+                )
+            except EthereumSearchError:
+                receipts = [None] * len(chunk)
             for tx_hash, receipt in zip(chunk, receipts):
                 if isinstance(receipt, dict):
                     receipts_by_hash[tx_hash] = receipt
@@ -697,12 +711,27 @@ def search_ethereum_window(
 
             receipt = receipts_by_hash.get(tx_hash)
             if receipt is None:
-                receipt = rpc("eth_getTransactionReceipt", [tx_hash])
+                try:
+                    receipt = rpc("eth_getTransactionReceipt", [tx_hash])
+                except EthereumSearchError:
+                    receipt = None
                 if not isinstance(receipt, dict):
                     block_incomplete = True
                     receipt = {}
 
-            success = str(receipt.get("status") or "").lower() == "0x1"
+            receipt_status = str(receipt.get("status") or "").lower()
+            if receipt_status not in {"0x1", "0x0"}:
+                block_incomplete = True
+            success = receipt_status == "0x1"
+            if success:
+                transaction_status = "SUCCESS"
+                transaction_error = ""
+            elif receipt_status == "0x0":
+                transaction_status = "FAILED"
+                transaction_error = "Exécution EVM échouée"
+            else:
+                transaction_status = "UNKNOWN"
+                transaction_error = "Reçu Ethereum indisponible"
             gas_used = _hex_to_int(receipt.get("gasUsed"), 0)
             effective_gas_price = _hex_to_int(
                 receipt.get("effectiveGasPrice") or tx.get("gasPrice"),
@@ -716,11 +745,12 @@ def search_ethereum_window(
 
             explorer, secondary = _explorer_links(tx_hash)
             logs = receipt.get("logs") or []
-            if not isinstance(logs, list):
+            if not success or not isinstance(logs, list):
                 logs = []
 
             addresses: set[str] = {address for address in (sender, destination) if address}
             tx_asset_deltas: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
+            observed_assets: dict[tuple[str, str], set[str]] = defaultdict(set)
 
             if success and value_wei > 0:
                 amount_text = _format_decimal(value_eth)
@@ -805,6 +835,7 @@ def search_ethereum_window(
                 )
                 if sender:
                     tx_asset_deltas[("ETH", "")] -= value_eth
+                    observed_assets[("ETH", "")].add("ETH")
                 if destination and destination == sender:
                     tx_asset_deltas[("ETH", "")] += value_eth
 
@@ -878,8 +909,10 @@ def search_ethereum_window(
                 economic_token = "" if asset == "WETH" else token_address
                 if source == sender:
                     tx_asset_deltas[(economic_asset, economic_token)] -= token_amount
+                    observed_assets[(economic_asset, economic_token)].add(asset)
                 if target == sender:
                     tx_asset_deltas[(economic_asset, economic_token)] += token_amount
+                    observed_assets[(economic_asset, economic_token)].add(asset)
 
             normalized_deltas = [
                 (asset, token_address, delta)
@@ -894,17 +927,24 @@ def search_ethereum_window(
             }
 
             if success and negatives and positives and len(distinct_assets) >= 2:
+                def observed_label(asset: str, token_address: str) -> str:
+                    return (
+                        "WETH"
+                        if observed_assets[(asset, token_address)] == {"WETH"}
+                        else asset
+                    )
+
                 sent_parts = [
-                    f"{_format_decimal(abs(delta))} {asset}"
-                    for asset, _token, delta in sorted(
+                    f"{_format_decimal(abs(delta))} {observed_label(asset, token)}"
+                    for asset, token, delta in sorted(
                         negatives,
                         key=lambda item: abs(item[2]),
                         reverse=True,
                     )
                 ]
                 received_parts = [
-                    f"{_format_decimal(delta)} {asset}"
-                    for asset, _token, delta in sorted(
+                    f"{_format_decimal(delta)} {observed_label(asset, token)}"
+                    for asset, token, delta in sorted(
                         positives,
                         key=lambda item: abs(item[2]),
                         reverse=True,
@@ -916,7 +956,7 @@ def search_ethereum_window(
                     legs.append(
                         {
                             "direction": "sent",
-                            "asset": asset,
+                            "asset": observed_label(asset, token_address),
                             "token_address": token_address,
                             "amount": _format_decimal(abs(delta)),
                         }
@@ -925,7 +965,7 @@ def search_ethereum_window(
                     legs.append(
                         {
                             "direction": "received",
-                            "asset": asset,
+                            "asset": observed_label(asset, token_address),
                             "token_address": token_address,
                             "amount": _format_decimal(delta),
                         }
@@ -962,11 +1002,13 @@ def search_ethereum_window(
                     "block_time_utc": block_time,
                     "transaction_index": tx_index,
                     "signature": tx_hash,
-                    "status": "SUCCESS" if success else "FAILED",
-                    "fee_eth": _format_decimal(fee_eth),
+                    "status": transaction_status,
+                    "fee_eth": (
+                        "" if transaction_status == "UNKNOWN" else _format_decimal(fee_eth)
+                    ),
                     "account_count": len(addresses),
                     "accounts": " | ".join(sorted(addresses)),
-                    "error": "" if success else "Exécution EVM échouée",
+                    "error": transaction_error,
                     "explorer": explorer,
                     "secondary_explorer": secondary,
                 }
@@ -1036,7 +1078,7 @@ def search_ethereum_window(
         transaction_row["operation_count"] = len(tx_operations)
         transaction_row["operation_summary"] = " | ".join(summaries)
 
-    matches_rows: list[dict[str, Any]] = []
+    matches_rows: list[dict[str, Any]] = row_budget.rows()
     matched_signature_asset_amount: set[tuple[str, str, str]] = set()
 
     if target_amount is not None:
@@ -1073,7 +1115,7 @@ def search_ethereum_window(
                     "transfer": "Montant transféré",
                 }.get(direction, "Montant correspondant")
 
-                display_asset = "ETH" if asset == "WETH" and target_asset == "ETH" else asset
+                display_asset = asset
                 amount_text = _format_decimal(abs(leg_amount))
                 identity_asset = (
                     "ETH"
@@ -1140,7 +1182,7 @@ def search_ethereum_window(
             matches_rows.append(
                 {
                     "match_type": "swap_probable",
-                    "match_role": "Montant exact encodé dans le swap",
+                    "match_role": "Indice de montant exact dans le calldata",
                     "match_quality": "exact",
                     "block": evidence["block"],
                     "block_time_utc": evidence["block_time_utc"],
@@ -1152,7 +1194,7 @@ def search_ethereum_window(
                     "source": "",
                     "destination": "",
                     "account": swap["account"],
-                    "detail": "Montant communiqué trouvé dans le calldata du swap",
+                    "detail": "Indice technique : montant communiqué présent dans le calldata du swap",
                     "explorer": evidence["explorer"],
                     "secondary_explorer": evidence["secondary_explorer"],
                 }
@@ -1201,7 +1243,7 @@ def search_ethereum_window(
                     "block_time_utc": movement["block_time_utc"],
                     "signature": movement["signature"],
                     "matched_amount": amount_text,
-                    "matched_asset": "ETH" if asset == "WETH" and target_asset == "ETH" else asset,
+                    "matched_asset": asset,
                     "sent": "",
                     "received": "",
                     "source": "",
@@ -1274,7 +1316,15 @@ def search_ethereum_window(
         "skipped_blocks": skipped_blocks,
         "failed_blocks": skipped_blocks,
         "outside_window_blocks": outside_window_blocks,
-        "search_completeness": "partial" if skipped_blocks else "complete",
+        "coverage_missing_before": coverage_missing_before,
+        "coverage_missing_after": coverage_missing_after,
+        "covered_start_dt": covered_start_dt,
+        "covered_end_dt": covered_end_dt,
+        "search_completeness": (
+            "partial"
+            if skipped_blocks or coverage_missing_before or coverage_missing_after
+            else "complete"
+        ),
         "transactions": transactions_rows,
         "operations": operations_rows,
         "movements": movements_rows,

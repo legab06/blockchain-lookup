@@ -14,19 +14,52 @@ from blockchain_lookup.engines.ethereum import EthereumSearchError
 from blockchain_lookup.engines.solana import SolanaSearchError
 from blockchain_lookup.runtime.concurrency import (
     DEFAULT_MAX_CONCURRENT_SEARCHES,
+    DEFAULT_QUEUE_TIMEOUT_SECONDS,
     MAX_CONCURRENT_SEARCHES_ENV,
+    QUEUE_TIMEOUT_ENV,
     SearchLimiter,
+    SearchQueueTimeoutError,
+    configured_queue_timeout,
     configured_search_limit,
     finish_session_search,
     try_start_session_search,
 )
 from blockchain_lookup.ui.downloads import to_csv_bytes
+from blockchain_lookup.runtime.result_limits import ResultLimitExceeded
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class SearchLimiterTests(unittest.TestCase):
+    def test_queue_timeout_configuration_defaults_and_invalid_values(self):
+        for raw, expected in (
+            (None, DEFAULT_QUEUE_TIMEOUT_SECONDS),
+            ("2.5", 2.5),
+            ("invalid", DEFAULT_QUEUE_TIMEOUT_SECONDS),
+            ("0", DEFAULT_QUEUE_TIMEOUT_SECONDS),
+            ("-1", DEFAULT_QUEUE_TIMEOUT_SECONDS),
+            ("nan", DEFAULT_QUEUE_TIMEOUT_SECONDS),
+            ("inf", DEFAULT_QUEUE_TIMEOUT_SECONDS),
+        ):
+            with self.subTest(raw=raw):
+                environ = {} if raw is None else {QUEUE_TIMEOUT_ENV: raw}
+                self.assertEqual(configured_queue_timeout(environ), expected)
+
+    def test_queue_timeout_does_not_leak_a_slot(self):
+        limiter = SearchLimiter(1, wait_timeout=0.01)
+        queued = []
+        with limiter.slot(search_id="first", network="Solana"):
+            with self.assertRaises(SearchQueueTimeoutError) as caught:
+                with limiter.slot(
+                    search_id="second", network="Ethereum", on_queued=lambda: queued.append(True)
+                ):
+                    self.fail("Timed-out search entered the critical section")
+        self.assertEqual(queued, [True])
+        self.assertIn("Serveur actuellement occupé", str(caught.exception))
+        with limiter.slot(search_id="third", network="Bitcoin"):
+            pass
+
     def test_configuration_defaults_and_invalid_values(self):
         for raw, expected in (
             (None, DEFAULT_MAX_CONCURRENT_SEARCHES),
@@ -125,6 +158,30 @@ class SearchLimiterTests(unittest.TestCase):
 
 
 class StreamlitConcurrencyTests(unittest.TestCase):
+    def test_result_limit_error_is_visible_without_retaining_partial_result(self):
+        app = AppTest.from_file(str(ROOT / "app.py")).run(timeout=20)
+        with patch(
+            "blockchain_lookup.ui.app.search_solana_window",
+            side_effect=ResultLimitExceeded("Recherche interrompue : limite atteinte."),
+        ):
+            app.button[0].click().run(timeout=20)
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertFalse(app.session_state["search_running"])
+        self.assertNotIn("lookup_result", app.session_state)
+        self.assertTrue(any("limite atteinte" in item.value for item in app.error))
+
+    def test_queue_timeout_is_shown_and_session_flag_is_cleared(self):
+        app = AppTest.from_file(str(ROOT / "app.py")).run(timeout=20)
+        limiter = SearchLimiter(1, wait_timeout=0.01)
+        with limiter.slot(search_id="holder", network="Bitcoin"):
+            with patch("blockchain_lookup.ui.app.SEARCH_LIMITER", limiter):
+                app.button[0].click().run(timeout=20)
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertFalse(app.session_state["search_running"])
+        self.assertTrue(any("Serveur actuellement occupé" in item.value for item in app.error))
+
     def test_queued_search_explains_wait_then_start_in_ui(self):
         class QueueOnce:
             @contextmanager

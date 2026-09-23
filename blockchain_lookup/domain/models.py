@@ -104,6 +104,13 @@ class BitcoinTimeFallback(TypedDict):
     block_timestamp_utc: str | None
 
 
+class TemporalCoverage(TypedDict):
+    covered_start_utc: str
+    covered_end_utc: str
+    missing_before: bool
+    missing_after: bool
+
+
 class SearchManifest(TypedDict):
     schema_version: int
     application: ManifestApplication
@@ -112,6 +119,7 @@ class SearchManifest(TypedDict):
     source: ManifestSource
     executed_at_utc: str
     blocks: ManifestBlocks
+    temporal_coverage: NotRequired[TemporalCoverage]
     bitcoin_time_fallback: NotRequired[BitcoinTimeFallback]
 
 
@@ -131,6 +139,10 @@ class SearchResult(TypedDict):
     failed_blocks: int
     outside_window_blocks: int
     search_completeness: SearchCompleteness
+    coverage_missing_before: NotRequired[bool]
+    coverage_missing_after: NotRequired[bool]
+    covered_start_dt: NotRequired[datetime]
+    covered_end_dt: NotRequired[datetime]
     transactions: list[TransactionRow]
     operations: list[OperationRow]
     movements: list[MovementRow]

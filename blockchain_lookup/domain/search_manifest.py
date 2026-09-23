@@ -112,6 +112,13 @@ def build_search_manifest(
             "analyzed_hashes": analyzed_hashes,
         },
     }
+    if "covered_start_dt" in result and "covered_end_dt" in result:
+        manifest["temporal_coverage"] = {
+            "covered_start_utc": _utc(result["covered_start_dt"]),
+            "covered_end_utc": _utc(result["covered_end_dt"]),
+            "missing_before": bool(result.get("coverage_missing_before")),
+            "missing_after": bool(result.get("coverage_missing_after")),
+        }
     if network == "Bitcoin":
         fallback_timestamp = result.get("time_fallback_block_timestamp")
         manifest["bitcoin_time_fallback"] = {

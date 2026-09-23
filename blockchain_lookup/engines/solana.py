@@ -14,6 +14,7 @@ from blockchain_lookup.domain.amount_matching import AmountCriterion, parse_amou
 from blockchain_lookup.domain.models import SearchResult
 from blockchain_lookup.domain.result_ordering import sort_result_rows
 from blockchain_lookup.domain.search_manifest import build_search_manifest
+from blockchain_lookup.runtime.result_limits import ResultRowBudget, configured_max_result_rows
 
 DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com"
 DEFAULT_RPC_DELAY = 0.15
@@ -306,8 +307,8 @@ def search_solana_window(
         return rpc("getBlockTime", [slot])
 
     def find_nearest_slot_for_timestamp(target_ts: int):
-        low = rpc("getFirstAvailableBlock")
-        high = rpc("getSlot", [{"commitment": "finalized"}])
+        low = first_available_slot
+        high = latest_finalized_slot
 
         best_slot = None
         best_time = None
@@ -373,14 +374,54 @@ def search_solana_window(
             "approximate": "APPROX",
         }.get(quality, "")
 
+    first_available_slot = rpc("getFirstAvailableBlock")
+    latest_finalized_slot = rpc("getSlot", [{"commitment": "finalized"}])
+    if first_available_slot > latest_finalized_slot:
+        raise SolanaSearchError("Impossible de déterminer les slots Solana disponibles.")
+    first_available_slot = valid_slot_near(
+        first_available_slot, first_available_slot, latest_finalized_slot, radius=1000
+    )
+    if first_available_slot is None:
+        raise SolanaSearchError("Impossible de déterminer les slots Solana disponibles.")
+    latest_finalized_slot = valid_slot_near(
+        latest_finalized_slot, first_available_slot, latest_finalized_slot, radius=1000
+    )
+    if latest_finalized_slot is None:
+        raise SolanaSearchError("Impossible de déterminer les slots Solana disponibles.")
+    earliest_available_ts = get_block_time(first_available_slot)
+    latest_available_ts = get_block_time(latest_finalized_slot)
+    if earliest_available_ts is None or latest_available_ts is None:
+        raise SolanaSearchError("Impossible de dater les bornes Solana disponibles.")
+    if end_ts < earliest_available_ts:
+        raise SolanaSearchError(
+            "La fenêtre demandée précède l'historique disponible du RPC Solana. "
+            "Utilisez un RPC Solana avec historique archive."
+        )
+    if start_ts > latest_available_ts:
+        raise SolanaSearchError(
+            "La fenêtre demandée est postérieure au dernier slot Solana finalized disponible."
+        )
+    coverage_missing_before = start_ts < earliest_available_ts
+    coverage_missing_after = end_ts > latest_available_ts
+    covered_start_dt = datetime.fromtimestamp(
+        max(start_ts, earliest_available_ts), tz=timezone.utc
+    )
+    covered_end_dt = datetime.fromtimestamp(
+        min(end_ts, latest_available_ts), tz=timezone.utc
+    )
+
     _notify(status_callback, "Recherche de la borne de début…")
     start_slot, start_slot_time = find_nearest_slot_for_timestamp(start_ts)
 
     _notify(status_callback, "Recherche de la borne de fin…")
     end_slot, end_slot_time = find_nearest_slot_for_timestamp(end_ts)
 
-    query_start_slot = max(0, min(start_slot, end_slot) - BOUNDARY_SLOT_MARGIN)
-    query_end_slot = max(start_slot, end_slot) + BOUNDARY_SLOT_MARGIN
+    query_start_slot = max(
+        first_available_slot, min(start_slot, end_slot) - BOUNDARY_SLOT_MARGIN
+    )
+    query_end_slot = min(
+        latest_finalized_slot, max(start_slot, end_slot) + BOUNDARY_SLOT_MARGIN
+    )
 
     _notify(
         status_callback,
@@ -397,12 +438,13 @@ def search_solana_window(
             "importante pour le RPC public Solana. Réduisez la tolérance temporelle."
         )
 
-    transactions_rows: list[dict[str, Any]] = []
-    transfers_rows: list[dict[str, Any]] = []
-    movements_rows: list[dict[str, Any]] = []
-    operations_rows: list[dict[str, Any]] = []
-    transfer_evidence_rows: list[dict[str, Any]] = []
-    raw_amount_evidence_rows: list[dict[str, Any]] = []
+    row_budget = ResultRowBudget(configured_max_result_rows())
+    transactions_rows: list[dict[str, Any]] = row_budget.rows()
+    transfers_rows: list[dict[str, Any]] = row_budget.rows()
+    movements_rows: list[dict[str, Any]] = row_budget.rows()
+    operations_rows: list[dict[str, Any]] = row_budget.rows()
+    transfer_evidence_rows: list[dict[str, Any]] = row_budget.rows()
+    raw_amount_evidence_rows: list[dict[str, Any]] = row_budget.rows()
 
     analyzed_blocks = 0
     skipped_blocks = 0
@@ -815,7 +857,13 @@ def search_solana_window(
                 }
             )
 
+            # Une transaction échouée ne valide aucun de ses transferts ou swaps.
+            # Les seuls changements de solde certains sont les frais, déjà affichés.
+            if not success:
+                continue
+
             owner_asset_deltas: dict[tuple[str, str, str], Decimal] = defaultdict(Decimal)
+            observed_assets: dict[tuple[str, str, str], set[str]] = defaultdict(set)
 
             # Variations natives SOL.
             for account_index, address in enumerate(addresses):
@@ -863,6 +911,7 @@ def search_solana_window(
                         owner_asset_deltas[(address, "SOL", "")] += (
                             Decimal(economic_delta_lamports) / LAMPORTS_PER_SOL
                         )
+                        observed_assets[(address, "SOL", "")].add("SOL")
 
             # Variations des tokens SPL déjà présentes dans les métadonnées RPC.
             pre_token_balances = meta.get("preTokenBalances") or []
@@ -948,8 +997,10 @@ def search_solana_window(
                         # le même actif. Cela évite de classer un wrap/unwrap
                         # technique comme un swap utilisateur.
                         owner_asset_deltas[(owner, "SOL", "")] += delta
+                        observed_assets[(owner, "SOL", "")].add("WSOL")
                     else:
                         owner_asset_deltas[(owner, asset, mint)] += delta
+                        observed_assets[(owner, asset, mint)].add(asset)
 
             # Un même signataire qui perd un actif et en reçoit un autre est
             # présenté comme un échange probable. Cette heuristique ne dépend
@@ -960,6 +1011,13 @@ def search_solana_window(
                     deltas_by_owner[owner].append((asset, mint, delta))
 
             for owner, legs in deltas_by_owner.items():
+                def observed_label(asset: str, mint: str) -> str:
+                    return (
+                        "WSOL"
+                        if observed_assets[(owner, asset, mint)] == {"WSOL"}
+                        else asset
+                    )
+
                 negatives = [leg for leg in legs if leg[2] < 0]
                 positives = [leg for leg in legs if leg[2] > 0]
 
@@ -968,16 +1026,16 @@ def search_solana_window(
                     continue
 
                 sent_parts = [
-                    f"{_format_decimal(abs(delta))} {asset}"
-                    for asset, _mint, delta in sorted(
+                    f"{_format_decimal(abs(delta))} {observed_label(asset, mint)}"
+                    for asset, mint, delta in sorted(
                         negatives,
                         key=lambda item: abs(item[2]),
                         reverse=True,
                     )
                 ]
                 received_parts = [
-                    f"{_format_decimal(delta)} {asset}"
-                    for asset, _mint, delta in sorted(
+                    f"{_format_decimal(delta)} {observed_label(asset, mint)}"
+                    for asset, mint, delta in sorted(
                         positives,
                         key=lambda item: abs(item[2]),
                         reverse=True,
@@ -989,7 +1047,7 @@ def search_solana_window(
                     operation_legs.append(
                         {
                             "direction": "sent",
-                            "asset": asset,
+                            "asset": observed_label(asset, mint),
                             "mint": mint,
                             "amount": _format_decimal(abs(delta)),
                         }
@@ -998,7 +1056,7 @@ def search_solana_window(
                     operation_legs.append(
                         {
                             "direction": "received",
-                            "asset": asset,
+                            "asset": observed_label(asset, mint),
                             "mint": mint,
                             "amount": _format_decimal(delta),
                         }
@@ -1120,7 +1178,7 @@ def search_solana_window(
     # Correspondances exactes ou approchées : on cherche le montant sur toutes
     # les jambes d'une opération, puis on conserve les variations de solde
     # comme filet de sécurité.
-    matches_rows: list[dict[str, Any]] = []
+    matches_rows: list[dict[str, Any]] = row_budget.rows()
     matched_signature_asset_amount: set[tuple[str, str, str]] = set()
 
     if target_amount is not None:
@@ -1230,11 +1288,7 @@ def search_solana_window(
                     "block_time_utc": evidence["block_time_utc"],
                     "signature": evidence["signature"],
                     "matched_amount": amount_text,
-                    "matched_asset": (
-                        "SOL"
-                        if asset == "WSOL" or mint == WSOL_MINT
-                        else asset
-                    ),
+                    "matched_asset": asset,
                     "sent": swap["sent"],
                     "received": swap["received"],
                     "source": evidence["source"],
@@ -1287,7 +1341,7 @@ def search_solana_window(
             matches_rows.append(
                 {
                     "match_type": "swap_probable",
-                    "match_role": "Montant exact encodé dans le swap",
+                    "match_role": "Indice de montant exact encodé dans le swap",
                     "match_quality": "exact",
                     "block": evidence["block"],
                     "block_time_utc": evidence["block_time_utc"],
@@ -1300,7 +1354,7 @@ def search_solana_window(
                     "destination": "",
                     "account": swap["account"],
                     "detail": (
-                        "Montant communiqué trouvé tel quel dans les données "
+                        "Indice technique : montant communiqué présent dans les données "
                         f"brutes de l'instruction {evidence['location']}"
                         + (
                             f" · programme {evidence['program_id']}"
@@ -1434,7 +1488,15 @@ def search_solana_window(
         "skipped_blocks": skipped_blocks,
         "failed_blocks": skipped_blocks,
         "outside_window_blocks": outside_window_blocks,
-        "search_completeness": "partial" if skipped_blocks else "complete",
+        "coverage_missing_before": coverage_missing_before,
+        "coverage_missing_after": coverage_missing_after,
+        "covered_start_dt": covered_start_dt,
+        "covered_end_dt": covered_end_dt,
+        "search_completeness": (
+            "partial"
+            if skipped_blocks or coverage_missing_before or coverage_missing_after
+            else "complete"
+        ),
         "transactions": transactions_rows,
         "transfers": transfers_rows,
         "operations": operations_rows,
