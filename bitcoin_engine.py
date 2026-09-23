@@ -1147,12 +1147,15 @@ def search_bitcoin_window(
         "candidate_blocks": (
             total_candidates
         ),
-        "skipped_blocks": (
+        "skipped_blocks": 0,
+        "failed_blocks": 0,
+        "outside_window_blocks": (
             scan_end
             - scan_start
             + 1
             - total_candidates
         ),
+        "search_completeness": "complete",
         "time_fallback_used": (
             time_fallback_used
         ),

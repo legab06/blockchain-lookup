@@ -563,6 +563,7 @@ def search_ethereum_window(
 
     analyzed_blocks = 0
     skipped_blocks = 0
+    outside_window_blocks = 0
 
     def append_operation(
         *,
@@ -672,15 +673,16 @@ def search_ethereum_window(
             continue
 
         if not (start_ts <= block_ts <= end_ts):
+            outside_window_blocks += 1
             continue
 
-        analyzed_blocks += 1
         block_time = datetime.fromtimestamp(
             block_ts,
             tz=timezone.utc,
         ).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        transactions = block.get("transactions") or []
+        transactions = block.get("transactions")
+        block_incomplete = not isinstance(transactions, list)
         if not isinstance(transactions, list):
             transactions = []
 
@@ -715,6 +717,7 @@ def search_ethereum_window(
             if receipt is None:
                 receipt = rpc("eth_getTransactionReceipt", [tx_hash])
                 if not isinstance(receipt, dict):
+                    block_incomplete = True
                     receipt = {}
 
             success = str(receipt.get("status") or "").lower() == "0x1"
@@ -986,6 +989,11 @@ def search_ethereum_window(
                     "secondary_explorer": secondary,
                 }
             )
+
+        if block_incomplete:
+            skipped_blocks += 1
+        else:
+            analyzed_blocks += 1
 
     if progress_callback:
         progress_callback(total_candidates, total_candidates, query_end_block)
@@ -1268,6 +1276,9 @@ def search_ethereum_window(
         "candidate_blocks": total_candidates,
         "analyzed_blocks": analyzed_blocks,
         "skipped_blocks": skipped_blocks,
+        "failed_blocks": skipped_blocks,
+        "outside_window_blocks": outside_window_blocks,
+        "search_completeness": "partial" if skipped_blocks else "complete",
         "transactions": transactions_rows,
         "operations": operations_rows,
         "movements": movements_rows,

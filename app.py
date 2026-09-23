@@ -8,6 +8,7 @@ import streamlit as st
 
 from bitcoin_engine import BitcoinSearchError, search_bitcoin_window
 from ethereum_engine import EthereumSearchError, search_ethereum_window
+from search_result_messages import no_matches_message, partial_search_warning
 from solana_engine import SolanaSearchError, search_solana_window
 
 
@@ -943,6 +944,10 @@ if result and result.get("network") == network:
         unsafe_allow_html=True,
     )
 
+    completeness_warning = partial_search_warning(result)
+    if completeness_warning:
+        st.warning(completeness_warning)
+
     if result["network"] == "Bitcoin":
         st.caption(
             "Bitcoin n'horodate pas chaque transaction : la recherche UTC "
@@ -1011,11 +1016,7 @@ if result and result.get("network") == network:
                 f"{approximate_count} approchée(s)."
             )
         else:
-            st.warning(
-                f"Aucune correspondance pour {target_label}. "
-                "Consultez Transactions et Opérations pour examiner "
-                "toute la période."
-            )
+            st.warning(no_matches_message(result, target_label))
     else:
         st.caption("Critère réellement utilisé : **aucun montant**")
 
@@ -1113,7 +1114,11 @@ if result and result.get("network") == network:
             table_kind = "matches"
             key_prefix = "matches"
             filename = f"{result['network'].lower()}_matches.csv"
-            empty_message = "Aucune correspondance trouvée."
+            empty_message = (
+                no_matches_message(result)
+                if not result["matches"]
+                else "Aucune correspondance trouvée."
+            )
             intro = (
                 "Correspondances exactes ou approchées selon la précision "
                 "du montant renseigné."
@@ -1237,10 +1242,18 @@ if result and result.get("network") == network:
                     f"{result['query_start_block']} → "
                     f"{result['query_end_block']}"
                 )
-            st.write("**Blocs candidats / ignorés**")
+            st.write("**Candidats / analysés / non entièrement analysés / hors fenêtre**")
             st.code(
                 f"{result['candidate_blocks']} / "
-                f"{result['skipped_blocks']}"
+                f"{result['analyzed_blocks']} / "
+                f"{result['failed_blocks']} / "
+                f"{result['outside_window_blocks']}"
+            )
+            st.write("**Complétude**")
+            st.code(
+                "Complète"
+                if result["search_completeness"] == "complete"
+                else "Partielle"
             )
 
         st.caption(

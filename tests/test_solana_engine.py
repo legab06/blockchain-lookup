@@ -5,6 +5,7 @@ import urllib.error
 from datetime import date, datetime, time, timezone
 from unittest.mock import patch
 
+from search_result_messages import no_matches_message, partial_search_warning
 from solana_engine import (
     MAX_CANDIDATE_SLOTS,
     SolanaSearchError,
@@ -23,6 +24,7 @@ class FakeSolanaRpc:
         self.methods = []
         self.responses = []
         self.block_error = None
+        self.missing_block_slots = set()
 
     def __call__(self, request, timeout):
         payload = json.loads(request.data)
@@ -47,7 +49,10 @@ class FakeSolanaRpc:
         elif method == "getBlock":
             if self.block_error is not None:
                 return io.BytesIO(json.dumps({"error": self.block_error}).encode())
-            result = {"blockTime": params[0], "transactions": []}
+            result = (
+                None if params[0] in self.missing_block_slots
+                else {"blockTime": params[0], "transactions": []}
+            )
         else:
             raise AssertionError(f"Unexpected RPC method: {method}")
 
@@ -64,6 +69,29 @@ class SolanaEngineTests(unittest.TestCase):
 
         self.assertEqual(result["candidate_blocks"], 41)
         self.assertEqual(rpc.methods.count("getBlock"), 41)
+        self.assertEqual(result["search_completeness"], "complete")
+        self.assertEqual(result["failed_blocks"], 0)
+        self.assertEqual(result["analyzed_blocks"], 21)
+        self.assertEqual(result["outside_window_blocks"], 20)
+        self.assertIsNone(partial_search_warning(result))
+
+    def test_unavailable_candidate_marks_search_partial(self):
+        rpc = FakeSolanaRpc()
+        rpc.missing_block_slots.add(CENTER_TS)
+        with patch("solana_engine.urllib.request.urlopen", side_effect=rpc):
+            result = search_solana_window(
+                SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
+            )
+
+        self.assertEqual(result["search_completeness"], "partial")
+        self.assertEqual(result["candidate_blocks"], 21)
+        self.assertEqual(result["analyzed_blocks"], 0)
+        self.assertEqual(result["failed_blocks"], 1)
+        self.assertEqual(result["skipped_blocks"], 1)
+        self.assertEqual(result["outside_window_blocks"], 20)
+        self.assertEqual(result["matches"], [])
+        self.assertIn("1 slot", partial_search_warning(result))
+        self.assertIn("n’est pas concluante", no_matches_message(result, "1 SOL"))
 
     def test_window_above_limit_stops_before_get_block(self):
         rpc = FakeSolanaRpc()
