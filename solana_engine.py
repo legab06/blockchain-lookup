@@ -7,6 +7,7 @@ import urllib.request
 from collections import defaultdict
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
 from amount_matching import AmountCriterion, parse_amount_criterion
@@ -14,6 +15,7 @@ from amount_matching import AmountCriterion, parse_amount_criterion
 DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com"
 DEFAULT_RPC_DELAY = 0.15
 BOUNDARY_SLOT_MARGIN = 10
+MAX_CANDIDATE_SLOTS = 750
 MAX_SUPPORTED_TRANSACTION_VERSION = 1
 LAMPORTS_PER_SOL = Decimal("1000000000")
 
@@ -41,9 +43,32 @@ class SolanaSearchError(RuntimeError):
     """Erreur lisible par l'interface lors d'une recherche Solana."""
 
 
+class _SolanaTransientError(SolanaSearchError):
+    """Échec réseau pouvant être ignoré pour un bloc isolé."""
+
+
 def _notify(callback: StatusCallback | None, message: str) -> None:
     if callback:
         callback(message)
+
+
+def _retry_after_seconds(value: str | None, now: datetime | None = None) -> float | None:
+    """Parse un Retry-After HTTP (secondes entières ou date HTTP)."""
+    if value is None:
+        return None
+
+    value = value.strip()
+    if value.isascii() and value.isdecimal():
+        return float(value)
+
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if retry_at.tzinfo is None:
+        return None
+
+    return max(0.0, (retry_at - (now or datetime.now(timezone.utc))).total_seconds())
 
 
 def _parse_amount(value: str | Decimal | None, asset: str) -> Decimal | None:
@@ -251,7 +276,7 @@ def search_solana_window(
                             "Version de transaction Solana non prise en charge : "
                             f"{error.get('message', error)}"
                         )
-                    raise RuntimeError(error)
+                    raise SolanaSearchError(f"Erreur RPC Solana : {error}")
 
                 if rpc_delay:
                     time.sleep(rpc_delay)
@@ -262,18 +287,22 @@ def search_solana_window(
 
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 and attempt < retries - 1:
-                    wait = 2 + attempt * 2
+                    retry_after = _retry_after_seconds(
+                        exc.headers.get("Retry-After") if exc.headers else None
+                    )
+                    wait = retry_after if retry_after is not None else 2 + attempt * 2
                     _notify(
                         status_callback,
-                        f"Limite du RPC Solana atteinte (429) — nouvelle tentative dans {wait}s…",
+                        f"Limite du RPC Solana atteinte (429) — nouvelle tentative dans {wait:g}s…",
                     )
                     time.sleep(wait)
                     continue
-                raise SolanaSearchError(f"Erreur HTTP RPC Solana : {exc}") from exc
+                error_type = _SolanaTransientError if exc.code == 429 else SolanaSearchError
+                raise error_type(f"Erreur HTTP RPC Solana : {exc}") from exc
 
-            except Exception as exc:
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
                 if attempt == retries - 1:
-                    raise SolanaSearchError(
+                    raise _SolanaTransientError(
                         f"Impossible de joindre le RPC Solana : {exc}"
                     ) from exc
 
@@ -382,6 +411,12 @@ def search_solana_window(
         "getBlocks",
         [query_start_slot, query_end_slot, {"commitment": "finalized"}],
     )
+    total_candidates = len(blocks_to_check)
+    if total_candidates > MAX_CANDIDATE_SLOTS:
+        raise SolanaSearchError(
+            f"{total_candidates} slots seraient analysés : cette fenêtre est trop "
+            "importante pour le RPC public Solana. Réduisez la tolérance temporelle."
+        )
 
     transactions_rows: list[dict[str, Any]] = []
     transfers_rows: list[dict[str, Any]] = []
@@ -700,7 +735,6 @@ def search_solana_window(
             ],
         )
 
-    total_candidates = len(blocks_to_check)
     _notify(status_callback, f"Analyse de {total_candidates} blocs candidats…")
 
     for block_number, block_slot in enumerate(blocks_to_check, start=1):
@@ -721,7 +755,7 @@ def search_solana_window(
                     },
                 ],
             )
-        except SolanaSearchError:
+        except _SolanaTransientError:
             skipped_blocks += 1
             continue
 
