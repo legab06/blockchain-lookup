@@ -4,12 +4,13 @@ import json
 import platform
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Mapping, cast
 from urllib.parse import urlsplit
 
+from blockchain_lookup.domain.models import SearchManifest
+from blockchain_lookup.version import __version__ as APP_VERSION
 
 APP_NAME = "Blockchain Lookup"
-APP_VERSION = "0.1.0"
 MANIFEST_SCHEMA_VERSION = 1
 
 
@@ -54,13 +55,13 @@ def _decimal_text(value: Decimal | None) -> str | None:
 
 
 def build_search_manifest(
-    result: dict[str, Any],
+    result: Mapping[str, Any],
     *,
     endpoint: str,
     amount_input: str | Decimal | None,
     analyzed_hashes: list[dict[str, Any]],
     executed_at: datetime | None = None,
-) -> dict[str, Any]:
+) -> SearchManifest:
     """Build the common manifest from data already collected by an engine."""
     network = result["network"]
     unit = "slot" if network == "Solana" else "block"
@@ -122,10 +123,10 @@ def build_search_manifest(
                 if fallback_timestamp is not None else None
             ),
         }
-    return manifest
+    return cast(SearchManifest, manifest)
 
 
-def manifest_json_bytes(manifest: dict[str, Any]) -> bytes:
+def manifest_json_bytes(manifest: SearchManifest) -> bytes:
     """Produce a readable UTF-8 export with stable key ordering."""
     text = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     return text.encode("utf-8")

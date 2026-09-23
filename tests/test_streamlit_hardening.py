@@ -5,7 +5,9 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from streamlit_errors import GENERIC_SEARCH_ERROR, log_unexpected_search_error
+from streamlit.testing.v1 import AppTest
+
+from blockchain_lookup.ui.errors import GENERIC_SEARCH_ERROR, log_unexpected_search_error
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,10 +61,18 @@ class StreamlitHardeningTests(unittest.TestCase):
         self.assertIn("Traceback", captured.output[0])
 
     def test_app_does_not_render_exception_object(self):
-        source = (ROOT / "app.py").read_text(encoding="utf-8")
+        source = (ROOT / "blockchain_lookup" / "ui" / "app.py").read_text(encoding="utf-8")
+        entrypoint = (ROOT / "app.py").read_text(encoding="utf-8")
 
         self.assertNotIn("st.exception(", source)
         self.assertIn("log_unexpected_search_error", source)
+        self.assertIn("from blockchain_lookup.ui.app import run_app", entrypoint)
+        self.assertIn("run_app()", entrypoint)
+
+    def test_root_entrypoint_renders_without_a_search(self):
+        app = AppTest.from_file(str(ROOT / "app.py")).run(timeout=20)
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(len(app.title), 1)
 
 
 if __name__ == "__main__":

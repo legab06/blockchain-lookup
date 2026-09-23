@@ -4,9 +4,9 @@ import unittest
 from datetime import date, datetime, time, timezone
 from unittest.mock import patch
 
-from bitcoin_engine import search_bitcoin_window
-from ethereum_engine import search_ethereum_window
-from search_result_messages import no_matches_message, partial_search_warning
+from blockchain_lookup.engines.bitcoin import search_bitcoin_window
+from blockchain_lookup.engines.ethereum import search_ethereum_window
+from blockchain_lookup.ui.messages import no_matches_message, partial_search_warning
 
 
 SEARCH_DATE = date(2024, 1, 1)
@@ -71,7 +71,7 @@ class FakeBitcoinApi:
 
 class SearchCompletenessTests(unittest.TestCase):
     def test_ethereum_complete_without_matches(self):
-        with patch("ethereum_engine.urllib.request.urlopen", side_effect=FakeEthereumRpc()):
+        with patch("blockchain_lookup.engines.ethereum.urllib.request.urlopen", side_effect=FakeEthereumRpc()):
             result = search_ethereum_window(
                 SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
             )
@@ -86,7 +86,7 @@ class SearchCompletenessTests(unittest.TestCase):
 
     def test_ethereum_missing_block_is_partial(self):
         rpc = FakeEthereumRpc(missing_block=CENTER_TS)
-        with patch("ethereum_engine.urllib.request.urlopen", side_effect=rpc):
+        with patch("blockchain_lookup.engines.ethereum.urllib.request.urlopen", side_effect=rpc):
             result = search_ethereum_window(
                 SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
             )
@@ -101,7 +101,7 @@ class SearchCompletenessTests(unittest.TestCase):
 
     def test_ethereum_missing_receipt_is_partial(self):
         rpc = FakeEthereumRpc(missing_receipt=True)
-        with patch("ethereum_engine.urllib.request.urlopen", side_effect=rpc):
+        with patch("blockchain_lookup.engines.ethereum.urllib.request.urlopen", side_effect=rpc):
             result = search_ethereum_window(
                 SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0, rpc_delay=0
             )
@@ -111,7 +111,7 @@ class SearchCompletenessTests(unittest.TestCase):
         self.assertEqual(result["analyzed_blocks"], 0)
 
     def test_bitcoin_complete_and_excludes_outside_window_blocks(self):
-        with patch("bitcoin_engine.urllib.request.urlopen", side_effect=FakeBitcoinApi()):
+        with patch("blockchain_lookup.engines.bitcoin.urllib.request.urlopen", side_effect=FakeBitcoinApi()):
             result = search_bitcoin_window(
                 SEARCH_DATE, SEARCH_TIME, tolerance_seconds=0,
                 api_url="https://example.invalid", api_delay=0,

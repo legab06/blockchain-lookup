@@ -4,13 +4,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from search_manifest import (
+from blockchain_lookup.domain.search_manifest import (
     APP_NAME,
     APP_VERSION,
     build_search_manifest,
     manifest_json_bytes,
     redact_endpoint,
 )
+from blockchain_lookup.version import __version__
 
 
 class SearchManifestTests(unittest.TestCase):
@@ -51,6 +52,7 @@ class SearchManifestTests(unittest.TestCase):
         self.assertTrue(exported.endswith(b"\n"))
         self.assertEqual(parsed["application"]["name"], APP_NAME)
         self.assertEqual(parsed["application"]["version"], APP_VERSION)
+        self.assertEqual(APP_VERSION, __version__)
         self.assertEqual(parsed["search"]["amount_input"], "1,50")
         self.assertEqual(parsed["search"]["amount_interpreted"], "1.50")
         self.assertEqual(parsed["search"]["decimal_precision"], 2)
@@ -99,7 +101,7 @@ class SearchManifestTests(unittest.TestCase):
         })
 
     def test_manifest_download_keeps_the_current_result(self):
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "blockchain_lookup" / "ui" / "app.py").read_text(encoding="utf-8")
         self.assertIn('st.session_state["lookup_result"] = result', source)
         self.assertIn('data=manifest_json_bytes(result["manifest"])', source)
         self.assertIn('on_click="ignore"', source)

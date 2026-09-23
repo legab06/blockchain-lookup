@@ -1,7 +1,9 @@
 """Messages de résultat liés à la complétude de la recherche."""
 
+from blockchain_lookup.domain.models import SearchResult
 
-def partial_search_warning(result: dict) -> str | None:
+
+def partial_search_warning(result: SearchResult) -> str | None:
     if result["search_completeness"] == "complete":
         return None
 
@@ -16,7 +18,7 @@ def partial_search_warning(result: dict) -> str | None:
     )
 
 
-def no_matches_message(result: dict, target_label: str | None = None) -> str:
+def no_matches_message(result: SearchResult, target_label: str | None = None) -> str:
     if result["search_completeness"] == "partial":
         subject = f" pour {target_label}" if target_label else ""
         count = result["failed_blocks"]

@@ -1,7 +1,7 @@
 from decimal import Decimal
 import unittest
 
-from amount_matching import parse_amount_criterion
+from blockchain_lookup.domain.amount_matching import parse_amount_criterion
 
 
 class AmountMatchingTests(unittest.TestCase):
