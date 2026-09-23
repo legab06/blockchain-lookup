@@ -355,7 +355,7 @@ Une absence de correspondance ne signifie donc pas nécessairement qu'une opéra
 
 ## Licence
 
-Copyright © 2026 **legab06** — **Tous droits réservés**.
+Copyright © 2026 **Gabriel Albaladejo** — **Tous droits réservés**.
 
 Blockchain Lookup est publié sous une **licence propriétaire**. La mise à disposition
 publique du code source ne constitue pas une autorisation générale de l'utiliser,
