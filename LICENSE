@@ -1,0 +1,64 @@
+Blockchain Lookup — Proprietary License
+Copyright (c) 2026 legab06
+All Rights Reserved.
+
+1. Ownership
+
+This software, including its source code, documentation, user interface,
+configuration files, tests, and other original material contained in this
+repository (the "Software"), is protected by copyright and other applicable
+intellectual property laws.
+
+Unless expressly stated otherwise for a specific third-party component, all
+rights in the Software are reserved by the copyright holder.
+
+2. No General License Granted
+
+No permission is granted to any person or entity to use, copy, modify, adapt,
+translate, merge, publish, distribute, sublicense, sell, lease, host, deploy,
+commercialize, create derivative works from, or otherwise exploit the Software,
+in whole or in part, without prior written authorization from the copyright
+holder.
+
+Possession of, access to, or visibility of the source code does not constitute
+a grant of any additional license or intellectual property right.
+
+3. Public Repository / GitHub Rights
+
+If this repository is made public on GitHub, nothing in this license is intended
+to restrict rights that must be granted to GitHub or to GitHub users under the
+applicable GitHub Terms of Service solely for operating, viewing, displaying,
+or using repository functionality provided by GitHub.
+
+Those platform-specific rights do not grant any broader right to reuse,
+redistribute, modify, deploy, commercialize, or create derivative works from
+the Software outside the permissions required by the GitHub Terms of Service.
+
+4. Third-Party Components
+
+Third-party libraries, dependencies, code, assets, or other materials included
+or referenced by the Software remain subject to their respective licenses and
+copyright notices. This license applies only to material for which the
+copyright holder has the right to grant or reserve rights.
+
+5. Written Permission
+
+Any use not expressly permitted by this license requires prior written
+authorization from the copyright holder.
+
+6. No Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE COPYRIGHT HOLDER SHALL
+NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF,
+OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+7. Reservation of Rights
+
+All rights not expressly granted are reserved.
+
+This is a proprietary license. The Software is not open-source software and is
+not released under an OSI-approved open-source license.
