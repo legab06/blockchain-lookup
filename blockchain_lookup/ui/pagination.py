@@ -42,7 +42,7 @@ def change_page(page_key: str, delta: int, total_pages: int) -> None:
     )
 
 
-def render_pagination_footer(
+def render_pagination_controls(
     *,
     total_rows: int,
     page: int,
@@ -58,64 +58,55 @@ def render_pagination_footer(
     page_key = f"{key_prefix}_page"
     page_size_key = f"{key_prefix}_page_size"
 
-    spacer_col, footer_col = st.columns(
-        [7.2, 2.8],
+    info_col, size_col, prev_col, page_col, next_col = st.columns(
+        [2.05, 1.25, 0.5, 1.25, 0.5],
         vertical_alignment="center",
     )
 
-    with spacer_col:
-        st.empty()
-
-    with footer_col:
-        info_col, size_col, prev_col, page_col, next_col = st.columns(
-            [2.05, 1.25, 0.5, 1.25, 0.5],
-            vertical_alignment="center",
+    with info_col:
+        st.markdown(
+            (
+                '<div class="table-footer-text table-footer-right">'
+                f"{start_row:,}–{end_row:,} sur {total_rows:,}"
+                "</div>"
+            ).replace(",", " "),
+            unsafe_allow_html=True,
         )
 
-        with info_col:
-            st.markdown(
-                (
-                    '<div class="table-footer-text table-footer-right">'
-                    f"{start_row:,}–{end_row:,} sur {total_rows:,}"
-                    "</div>"
-                ).replace(",", " "),
-                unsafe_allow_html=True,
-            )
+    with size_col:
+        st.selectbox(
+            "Lignes par page",
+            PAGE_SIZE_OPTIONS,
+            key=page_size_key,
+            label_visibility="collapsed",
+            format_func=lambda value: f"{value} / page",
+        )
 
-        with size_col:
-            st.selectbox(
-                "Lignes par page",
-                PAGE_SIZE_OPTIONS,
-                key=page_size_key,
-                label_visibility="collapsed",
-                format_func=lambda value: f"{value} / page",
-            )
+    with prev_col:
+        st.button(
+            "‹",
+            key=f"{key_prefix}_page_prev",
+            disabled=page <= 1,
+            use_container_width=True,
+            on_click=change_page,
+            args=(page_key, -1, total_pages),
+        )
 
-        with prev_col:
-            st.button(
-                "‹",
-                key=f"{key_prefix}_page_prev",
-                disabled=page <= 1,
-                use_container_width=True,
-                on_click=change_page,
-                args=(page_key, -1, total_pages),
-            )
+    with page_col:
+        st.selectbox(
+            "Page",
+            range(1, total_pages + 1),
+            key=page_key,
+            label_visibility="collapsed",
+            format_func=lambda value: f"{value} / {total_pages}",
+        )
 
-        with page_col:
-            st.selectbox(
-                "Page",
-                range(1, total_pages + 1),
-                key=page_key,
-                label_visibility="collapsed",
-                format_func=lambda value: f"{value} / {total_pages}",
-            )
-
-        with next_col:
-            st.button(
-                "›",
-                key=f"{key_prefix}_page_next",
-                disabled=page >= total_pages,
-                use_container_width=True,
-                on_click=change_page,
-                args=(page_key, 1, total_pages),
-            )
+    with next_col:
+        st.button(
+            "›",
+            key=f"{key_prefix}_page_next",
+            disabled=page >= total_pages,
+            use_container_width=True,
+            on_click=change_page,
+            args=(page_key, 1, total_pages),
+        )
