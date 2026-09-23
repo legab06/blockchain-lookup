@@ -20,31 +20,42 @@ def render_downloads(
     if not page_rows:
         return
 
-    st.download_button(
-        "Télécharger la page affichée CSV",
-        data=to_csv_bytes(page_rows),
-        file_name=filename,
-        mime="text/csv",
-        key=f"{key_prefix}_page_csv",
-        on_click="ignore",
+    download_col, prepare_col = st.columns(
+        [1.25, 1.75],
+        vertical_alignment="center",
     )
 
-    if len(filtered_rows) > len(page_rows):
-        prepare_full = st.checkbox(
-            f"Préparer le CSV complet ({len(filtered_rows)} lignes)",
-            value=False,
-            key=f"{key_prefix}_prepare_full_csv",
-            help=(
-                "La génération complète consomme davantage de mémoire. "
-                "Elle n'est effectuée que si cette case est cochée."
-            ),
+    with download_col:
+        st.download_button(
+            "Télécharger la page affichée CSV",
+            data=to_csv_bytes(page_rows),
+            file_name=filename,
+            mime="text/csv",
+            key=f"{key_prefix}_page_csv",
+            on_click="ignore",
+            use_container_width=True,
         )
-        if prepare_full:
-            st.download_button(
-                "Télécharger toutes les lignes filtrées CSV",
-                data=to_csv_bytes(filtered_rows),
-                file_name=filename.replace(".csv", "_complet.csv"),
-                mime="text/csv",
-                key=f"{key_prefix}_full_csv",
-                on_click="ignore",
+
+    prepare_full = False
+    with prepare_col:
+        if len(filtered_rows) > len(page_rows):
+            prepare_full = st.checkbox(
+                f"Préparer le CSV complet ({len(filtered_rows)} lignes)",
+                value=False,
+                key=f"{key_prefix}_prepare_full_csv",
+                help=(
+                    "La génération complète consomme davantage de mémoire. "
+                    "Elle n'est effectuée que si cette case est cochée."
+                ),
             )
+
+    if prepare_full:
+        st.download_button(
+            "Télécharger toutes les lignes filtrées CSV",
+            data=to_csv_bytes(filtered_rows),
+            file_name=filename.replace(".csv", "_complet.csv"),
+            mime="text/csv",
+            key=f"{key_prefix}_full_csv",
+            on_click="ignore",
+            use_container_width=True,
+        )
