@@ -427,6 +427,7 @@ def search_solana_window(
 
     analyzed_blocks = 0
     skipped_blocks = 0
+    outside_window_blocks = 0
 
     def append_operation(
         *,
@@ -769,6 +770,12 @@ def search_solana_window(
             continue
 
         if not (start_ts <= block_timestamp <= end_ts):
+            outside_window_blocks += 1
+            continue
+
+        transactions = block.get("transactions")
+        if not isinstance(transactions, list):
+            skipped_blocks += 1
             continue
 
         analyzed_blocks += 1
@@ -776,8 +783,6 @@ def search_solana_window(
             block_timestamp,
             tz=timezone.utc,
         ).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        transactions = block.get("transactions", [])
 
         for tx_index, tx in enumerate(transactions, start=1):
             transaction = tx.get("transaction", {})
@@ -1432,6 +1437,9 @@ def search_solana_window(
         "candidate_blocks": total_candidates,
         "analyzed_blocks": analyzed_blocks,
         "skipped_blocks": skipped_blocks,
+        "failed_blocks": skipped_blocks,
+        "outside_window_blocks": outside_window_blocks,
+        "search_completeness": "partial" if skipped_blocks else "complete",
         "transactions": transactions_rows,
         "transfers": transfers_rows,
         "operations": operations_rows,
