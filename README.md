@@ -228,6 +228,12 @@ Main file  : app.py
 
 Aucun secret n'est requis avec les endpoints publics configurés par défaut.
 
+Le serveur limite par défaut les scans simultanés à trois. La variable
+`BLOCKCHAIN_LOOKUP_MAX_CONCURRENT_SEARCHES` permet de fixer une autre limite
+positive ; une valeur absente, invalide ou non positive revient à trois. Les
+recherches supplémentaires attendent qu'une place se libère. Cette limite
+s'applique à chaque processus Streamlit.
+
 Les services publics peuvent cependant appliquer des limites de débit, réduire leur historique ou modifier leurs conditions d'accès. Pour un usage intensif, il est préférable de prévoir ses propres endpoints RPC/API.
 
 ---
@@ -241,6 +247,7 @@ blockchain-lookup/
 │   ├── version.py
 │   ├── domain/       # contrats, montants, ordre et manifest
 │   ├── engines/      # recherches Solana, Ethereum et Bitcoin
+│   ├── runtime/      # limite de concurrence des recherches
 │   └── ui/           # application Streamlit et présentation
 ├── pyproject.toml
 ├── requirements.txt

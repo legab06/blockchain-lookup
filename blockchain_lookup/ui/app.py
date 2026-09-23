@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from collections import deque
 from datetime import datetime, time, timezone
+from time import monotonic
+from uuid import uuid4
 
 import streamlit as st
 
@@ -11,6 +13,11 @@ from blockchain_lookup.domain.search_manifest import manifest_json_bytes
 from blockchain_lookup.engines.bitcoin import BitcoinSearchError, search_bitcoin_window
 from blockchain_lookup.engines.ethereum import EthereumSearchError, search_ethereum_window
 from blockchain_lookup.engines.solana import SolanaSearchError, search_solana_window
+from blockchain_lookup.runtime.concurrency import (
+    SEARCH_LIMITER,
+    finish_session_search,
+    try_start_session_search,
+)
 from blockchain_lookup.ui.downloads import render_downloads
 from blockchain_lookup.ui.errors import log_unexpected_search_error
 from blockchain_lookup.ui.messages import no_matches_message, partial_search_warning
@@ -153,148 +160,198 @@ def run_app() -> None:
             "Rechercher",
             type="primary",
             use_container_width=True,
+            disabled=bool(st.session_state.get("search_running", False)),
         )
 
-    if submitted:
-        # Un nouveau lancement invalide immédiatement l'ancien résultat. Cela évite
-        # qu'une recherche précédente reste affichée si la nouvelle échoue ou si
-        # un widget de formulaire n'a pas encore été synchronisé côté serveur.
-        st.session_state.pop("lookup_result", None)
+    if submitted and try_start_session_search(st.session_state):
+        try:
+            # Un nouveau lancement invalide immédiatement l'ancien résultat. Cela évite
+            # qu'une recherche précédente reste affichée si la nouvelle échoue ou si
+            # un widget de formulaire n'a pas encore été synchronisé côté serveur.
+            st.session_state.pop("lookup_result", None)
 
-        submitted_amount_raw = str(st.session_state.get("lookup_amount", ""))
-        submitted_amount = submitted_amount_raw.strip()
-        submitted_asset = str(asset)
-        submitted_network = str(network)
+            submitted_amount_raw = str(st.session_state.get("lookup_amount", ""))
+            submitted_amount = submitted_amount_raw.strip()
+            submitted_asset = str(asset)
+            submitted_network = str(network)
+            search_id = uuid4().hex[:12]
+            started_at = monotonic()
+            logger = logging.getLogger(__name__)
 
-        if network in {"Solana", "Ethereum", "Bitcoin"}:
-            progress_bar = st.progress(0, text="Initialisation…")
+            if network in {"Solana", "Ethereum", "Bitcoin"}:
+                progress_bar = st.progress(0, text="Initialisation…")
 
-            with st.status(
-                f"Recherche {network} en cours…",
-                expanded=True,
-            ) as status_box:
-                status_messages: deque[str] = deque(maxlen=MAX_STATUS_MESSAGES)
-                progress_ui_state = {"bucket": -1}
+                with st.status(
+                    f"Recherche {network} en cours…",
+                    expanded=True,
+                ) as status_box:
+                    status_messages: deque[str] = deque(maxlen=MAX_STATUS_MESSAGES)
+                    progress_ui_state = {"bucket": -1}
 
-                with st.container(height=STATUS_LOG_HEIGHT, border=False):
-                    status_log = st.empty()
+                    with st.container(height=STATUS_LOG_HEIGHT, border=False):
+                        status_log = st.empty()
 
-                def render_status_log() -> None:
-                    if not status_messages:
-                        status_log.caption("Aucun événement pour le moment.")
-                        return
-                    status_log.text("\n".join(status_messages))
+                    def render_status_log() -> None:
+                        if not status_messages:
+                            status_log.caption("Aucun événement pour le moment.")
+                            return
+                        status_log.text("\n".join(status_messages))
 
-                def on_status(message: str) -> None:
-                    normalized = " ".join(str(message).split())
-                    timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
-                    status_messages.appendleft(f"[{timestamp}] {normalized}")
-                    render_status_log()
+                    def on_status(message: str) -> None:
+                        normalized = " ".join(str(message).split())
+                        timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                        status_messages.appendleft(f"[{timestamp}] {normalized}")
+                        render_status_log()
 
-                def on_progress(current: int, total: int, block_number: int) -> None:
-                    if total <= 0:
-                        progress_bar.progress(0, text="Aucun bloc candidat")
-                        return
+                    def on_progress(current: int, total: int, block_number: int) -> None:
+                        if total <= 0:
+                            progress_bar.progress(0, text="Aucun bloc candidat")
+                            return
 
-                    bucket = (
-                        PROGRESS_BUCKETS
-                        if current >= total
-                        else int(current * PROGRESS_BUCKETS / total)
-                    )
-                    if bucket == progress_ui_state["bucket"]:
-                        return
-                    progress_ui_state["bucket"] = bucket
-
-                    ratio = min(max(current / total, 0.0), 1.0)
-                    unit = "slot" if network == "Solana" else "bloc"
-                    progress_bar.progress(
-                        ratio,
-                        text=(
-                            f"Analyse des blocs : {current}/{total} "
-                            f"· {unit} {block_number}"
-                        ),
-                    )
-
-                on_status("Initialisation de la recherche…")
-
-                try:
-                    if network == "Solana":
-                        result = search_solana_window(
-                            search_date=search_date,
-                            search_time=search_time,
-                            tolerance_seconds=int(tolerance),
-                            amount_sol=submitted_amount_raw,
-                            asset_symbol=submitted_asset,
-                            progress_callback=on_progress,
-                            status_callback=on_status,
+                        bucket = (
+                            PROGRESS_BUCKETS
+                            if current >= total
+                            else int(current * PROGRESS_BUCKETS / total)
                         )
-                    elif network == "Ethereum":
-                        result = search_ethereum_window(
-                            search_date=search_date,
-                            search_time=search_time,
-                            tolerance_seconds=int(tolerance),
-                            amount_eth=submitted_amount_raw,
-                            asset_symbol=submitted_asset,
-                            progress_callback=on_progress,
-                            status_callback=on_status,
-                        )
-                    else:
-                        result = search_bitcoin_window(
-                            search_date=search_date,
-                            search_time=search_time,
-                            tolerance_seconds=int(tolerance),
-                            amount_btc=submitted_amount_raw,
-                            asset_symbol=submitted_asset,
-                            progress_callback=on_progress,
-                            status_callback=on_status,
-                        )
-                except ValueError as exc:
-                    status_box.update(
-                        label="Paramètres invalides",
-                        state="error",
-                        expanded=True,
-                    )
-                    st.error(str(exc))
-                except (
-                    SolanaSearchError,
-                    EthereumSearchError,
-                    BitcoinSearchError,
-                ) as exc:
-                    status_box.update(
-                        label="Erreur pendant la recherche",
-                        state="error",
-                        expanded=True,
-                    )
-                    st.error(str(exc))
-                except Exception as exc:
-                    status_box.update(
-                        label="Erreur inattendue",
-                        state="error",
-                        expanded=True,
-                    )
-                    st.error(
-                        log_unexpected_search_error(
-                            logging.getLogger(__name__),
-                            exc,
-                        )
-                    )
-                else:
-                    if submitted_amount and result.get("target_amount") is None:
-                        raise RuntimeError(
-                            "Le montant saisi n'a pas été transmis au moteur de recherche."
+                        if bucket == progress_ui_state["bucket"]:
+                            return
+                        progress_ui_state["bucket"] = bucket
+
+                        ratio = min(max(current / total, 0.0), 1.0)
+                        unit = "slot" if network == "Solana" else "bloc"
+                        progress_bar.progress(
+                            ratio,
+                            text=(
+                                f"Analyse des blocs : {current}/{total} "
+                                f"· {unit} {block_number}"
+                            ),
                         )
 
-                    result["submitted_amount_raw"] = submitted_amount_raw
-                    result["submitted_asset"] = submitted_asset
-                    result["submitted_network"] = submitted_network
+                    on_status("Initialisation de la recherche…")
 
-                    progress_bar.progress(1.0, text="Recherche terminée")
-                    status_box.update(
-                        label="Recherche terminée",
-                        state="complete",
-                        expanded=False,
-                    )
-                    st.session_state["lookup_result"] = result
+                    def on_queued() -> None:
+                        message = (
+                            "Serveur occupé — votre recherche démarrera dès "
+                            "qu’une place sera disponible."
+                        )
+                        status_box.update(label=message, state="running", expanded=True)
+                        progress_bar.progress(0, text="En attente d’une place…")
+                        on_status(message)
+
+                    try:
+                        with SEARCH_LIMITER.slot(
+                            search_id=search_id,
+                            network=submitted_network,
+                            on_queued=on_queued,
+                        ):
+                            status_box.update(
+                                label=f"Recherche {network} en cours…",
+                                state="running",
+                                expanded=True,
+                            )
+                            progress_bar.progress(0, text="Recherche démarrée")
+                            on_status("Recherche démarrée.")
+                            logger.info(
+                                "Search started id=%s network=%s",
+                                search_id,
+                                submitted_network,
+                            )
+                            if network == "Solana":
+                                result = search_solana_window(
+                                    search_date=search_date,
+                                    search_time=search_time,
+                                    tolerance_seconds=int(tolerance),
+                                    amount_sol=submitted_amount_raw,
+                                    asset_symbol=submitted_asset,
+                                    progress_callback=on_progress,
+                                    status_callback=on_status,
+                                )
+                            elif network == "Ethereum":
+                                result = search_ethereum_window(
+                                    search_date=search_date,
+                                    search_time=search_time,
+                                    tolerance_seconds=int(tolerance),
+                                    amount_eth=submitted_amount_raw,
+                                    asset_symbol=submitted_asset,
+                                    progress_callback=on_progress,
+                                    status_callback=on_status,
+                                )
+                            else:
+                                result = search_bitcoin_window(
+                                    search_date=search_date,
+                                    search_time=search_time,
+                                    tolerance_seconds=int(tolerance),
+                                    amount_btc=submitted_amount_raw,
+                                    asset_symbol=submitted_asset,
+                                    progress_callback=on_progress,
+                                    status_callback=on_status,
+                                )
+                        if submitted_amount and result.get("target_amount") is None:
+                            raise RuntimeError(
+                                "Le montant saisi n'a pas été transmis au moteur de recherche."
+                            )
+
+                        result["submitted_amount_raw"] = submitted_amount_raw
+                        result["submitted_asset"] = submitted_asset
+                        result["submitted_network"] = submitted_network
+
+                        progress_bar.progress(1.0, text="Recherche terminée")
+                        status_box.update(
+                            label="Recherche terminée",
+                            state="complete",
+                            expanded=False,
+                        )
+                        st.session_state["lookup_result"] = result
+                        logger.info(
+                            "Search completed id=%s network=%s duration_seconds=%.3f matches=%s",
+                            search_id, submitted_network, monotonic() - started_at,
+                            len(result["matches"]),
+                        )
+                    except ValueError as exc:
+                        logger.warning(
+                            "Search failed id=%s network=%s type=%s duration_seconds=%.3f",
+                            search_id, submitted_network, type(exc).__name__, monotonic() - started_at,
+                        )
+                        status_box.update(
+                            label="Paramètres invalides",
+                            state="error",
+                            expanded=True,
+                        )
+                        st.error(str(exc))
+                    except (
+                        SolanaSearchError,
+                        EthereumSearchError,
+                        BitcoinSearchError,
+                    ) as exc:
+                        logger.warning(
+                            "Search failed id=%s network=%s type=%s duration_seconds=%.3f",
+                            search_id, submitted_network, type(exc).__name__, monotonic() - started_at,
+                        )
+                        status_box.update(
+                            label="Erreur pendant la recherche",
+                            state="error",
+                            expanded=True,
+                        )
+                        st.error(str(exc))
+                    except Exception as exc:
+                        logger.warning(
+                            "Search failed id=%s network=%s type=%s duration_seconds=%.3f",
+                            search_id, submitted_network, type(exc).__name__, monotonic() - started_at,
+                        )
+                        status_box.update(
+                            label="Erreur inattendue",
+                            state="error",
+                            expanded=True,
+                        )
+                        st.error(
+                            log_unexpected_search_error(
+                                logging.getLogger(__name__),
+                                exc,
+                            )
+                        )
+
+        finally:
+            finish_session_search(st.session_state)
 
     result: SearchResult | None = st.session_state.get("lookup_result")
 

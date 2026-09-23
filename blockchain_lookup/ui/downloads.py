@@ -2,7 +2,6 @@ import pandas as pd
 import streamlit as st
 
 
-@st.cache_data(show_spinner=False)
 def to_csv_bytes(rows: list[dict]) -> bytes:
     return (
         pd.DataFrame(rows)
