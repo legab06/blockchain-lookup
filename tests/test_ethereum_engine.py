@@ -7,7 +7,6 @@ from unittest.mock import patch
 from ethereum_engine import (
     KNOWN_ERC20,
     TRANSFER_TOPIC,
-    EthereumSearchError,
     search_ethereum_window,
 )
 

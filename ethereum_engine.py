@@ -110,36 +110,6 @@ def _topic_address(topic: Any) -> str:
     return "0x" + raw[-40:]
 
 
-def _parse_amount(
-    value: str | Decimal | None,
-    asset: str,
-) -> Decimal | None:
-    if value is None:
-        return None
-
-    raw = str(value).strip().replace(",", ".")
-    if not raw:
-        return None
-
-    try:
-        amount = Decimal(raw)
-    except InvalidOperation as exc:
-        raise ValueError("Montant invalide.") from exc
-
-    if amount < 0:
-        raise ValueError("Le montant doit être positif ou nul.")
-
-    decimals = 18 if asset == "ETH" else KNOWN_ERC20.get(asset, {}).get("decimals")
-    if decimals is not None:
-        base_units = amount * (Decimal(10) ** int(decimals))
-        if base_units != base_units.to_integral_value():
-            raise ValueError(
-                f"Un montant {asset} ne peut pas dépasser {int(decimals)} décimales."
-            )
-
-    return amount
-
-
 def _target_raw_units(asset: str, amount: Decimal | None) -> int | None:
     if amount is None:
         return None
@@ -192,25 +162,6 @@ def _target_match_quality(
         return None
 
     return target_criterion.classify(amount)
-
-
-def _target_matches(
-    *,
-    target_asset: str,
-    target_criterion: AmountCriterion | None,
-    target_token: str,
-    asset: str,
-    token_address: str,
-    amount: Decimal,
-) -> bool:
-    return _target_match_quality(
-        target_asset=target_asset,
-        target_criterion=target_criterion,
-        target_token=target_token,
-        asset=asset,
-        token_address=token_address,
-        amount=amount,
-    ) is not None
 
 
 def _input_contains_raw_amount(input_data: Any, raw_amount: int | None) -> bool:
